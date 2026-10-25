@@ -21,8 +21,10 @@ SAVE = os.path.join(SAVE_DIR, 'stats.json')
 SETTINGS_FILE = os.path.join(SAVE_DIR, 'settings.json')
 ASSETS = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'assets')
 DEFAULT_SETTINGS = {'master': .8, 'music': .6, 'sfx': .8, 'fullscreen': False, 'shake': True,
-                    'rain': 1, 'crt': True, 'rumble': True}
+                    'rain': 0 if ANDROID else 1, 'crt': not ANDROID, 'rumble': True,
+                    'gfx': 0 if ANDROID else 2, 'fps': False}       # gfx: graphics quality 0 LOW .. 2 HIGH
 RAIN_LEVELS = (("LIGHT", 35), ("MEDIUM", 70), ("HEAVY", 120))
+GFX_LEVELS = ("LOW", "MEDIUM", "HIGH")
 # on-screen controls: action -> [x, y, radius] in game pixels (480x270). The player can move/resize them in settings.
 DEFAULT_TOUCH = {'stick': [64, 206, 36], 'atk': [394, 222, 22], 'jump': [444, 188, 20], 'dash': [344, 238, 16],
                  'parry': [394, 170, 16], 'crouch': [448, 244, 14], 'super': [344, 190, 15], 'use': [296, 238, 13],
@@ -331,7 +333,7 @@ def glow(surf, x, y, r, col, flat=1.0):
             pg.draw.circle(g, (int(col[0] * k), int(col[1] * k), int(col[2] * k)), (r, r), i)
         if flat != 1.0:
             g = pg.transform.smoothscale(g, (r * 2, max(2, int(r * 2 * flat))))
-        _glow[key] = g
+        _glow[key] = g = g.convert()                       # display pixel format: fast blits (big win on phones)
     surf.blit(g, (int(x) - g.get_width() // 2, int(y) - g.get_height() // 2), special_flags=pg.BLEND_RGB_ADD)
 
 
@@ -342,8 +344,20 @@ def smoke_img(r, a, col):
         img = pg.Surface((r * 2 + 2, r * 2 + 2), pg.SRCALPHA)
         pg.draw.circle(img, col + (a,), (r + 1, r + 1), r)
         pg.draw.circle(img, tuple(min(255, c + 40) for c in col) + (a,), (r + 1 - r // 3, r + 1 - r // 3), max(1, r // 2))
-        _smoke[key] = img
+        _smoke[key] = img = img.convert_alpha()
     return img
+
+
+KEY = (255, 0, 255)                                         # colour key for pre-drawn transparent layers
+
+
+def keyed(surf):
+    """Opaque copy with a colour key: blits far faster than per-pixel alpha, especially on phones."""
+    out = pg.Surface(surf.get_size()).convert()
+    out.fill(KEY)
+    out.blit(surf, (0, 0))
+    out.set_colorkey(KEY, pg.RLEACCEL)
+    return out
 
 
 def qcol(col, k):
@@ -358,18 +372,32 @@ def hue(h, v=1.0):
     return (int(c.r * v), int(c.g * v), int(c.b * v))
 
 
+_txt, _beams, _touch = {}, {}, {}
+
+
+def rtext(f, s, col):
+    """Cached font.render - the same labels are drawn every frame."""
+    key = (id(f), s, col)
+    img = _txt.get(key)
+    if img is None:
+        if len(_txt) > 900:
+            _txt.clear()
+        img = _txt[key] = f.render(s, False, col)
+    return img
+
+
 def text(s, f, col, x, y, center=False, surf=None):
     surf = surf or scr
-    img = f.render(s, False, col)
+    img = rtext(f, s, col)
     if center:
         x -= img.get_width() // 2
-    surf.blit(f.render(s, False, (0, 0, 0)), (x + 1, y + 1))
+    surf.blit(rtext(f, s, (0, 0, 0)), (x + 1, y + 1))
     surf.blit(img, (x, y))
 
 
 def outlined(s, f, col, x, y, line=INK, center=False, r=2):
-    img = f.render(s, False, col)
-    sh = f.render(s, False, line)
+    img = rtext(f, s, col)
+    sh = rtext(f, s, line)
     if center:
         x -= img.get_width() // 2
     for dx, dy in ((-r, 0), (r, 0), (0, -r), (0, r), (r, r)):
@@ -1058,6 +1086,12 @@ def bake():
     pg.draw.polygon(pr, (12, 6, 12, 240), [(306, 0), (348, 0), (228, H), (186, H)])
     pg.draw.line(pr, (255, 255, 255, 255), (350, 0), (230, H), 2)
     L['p_red'] = pr
+    for k in ('far', 'mid', 'near', 'fg'):                   # big transparent layers -> colour-keyed (much faster to blit)
+        L[k] = keyed(L[k])
+    for k in ('sky', 'beam', 'cone'):
+        L[k] = L[k].convert()
+    for k in ('haze', 'floor', 'over', 'p_red'):
+        L[k] = L[k].convert_alpha()
     return L
 
 
@@ -1168,7 +1202,7 @@ class Game:
         s.capture, s.typing, s.name_buf = None, False, ''     # rebinding a control / typing the name
         s.col, s.denyT, s.skin_chains = 0, -9.0, {}
         s.fingers, s.tedit_sel, s.drag = {}, None, None        # touch: finger id -> [x, y, control]
-        s.touch_layer = pg.Surface((W, H), pg.SRCALPHA)
+        s.atk_rep = 0.0
         s.rain = []
         s.apply_settings()
         s.splash = []
@@ -1196,7 +1230,7 @@ class Game:
         for snd in SFX.values():
             snd.set_volume(vol)
         s.music_volume()
-        n = RAIN_LEVELS[st['rain']][1]
+        n = RAIN_LEVELS[st['rain']][1] if st['gfx'] else min(30, RAIN_LEVELS[st['rain']][1])
         s.rain = (s.rain + [[R(0, W), R(0, H), R(4, 9), R(250, 380)] for _ in range(n)])[:n]
         if st['fullscreen'] != s.fs_on:
             try:
@@ -1286,16 +1320,16 @@ class Game:
             except pg.error:
                 pass
         if TOUCH:                                                  # on-screen stick + held buttons
-            sx, sy, sr = s.settings['touch']['stick']
-            for x, y, owner in s.fingers.values():
-                if owner == 'stick':
-                    dx, dy = x - sx, y - sy
-                    h['left'] |= dx < -sr * .3
-                    h['right'] |= dx > sr * .3
-                    h['up'] |= dy < -sr * .5
-                    h['down'] |= dy > sr * .5
-                elif owner in ('jump', 'crouch'):
-                    h[owner] = True
+            sr = s.settings['touch']['stick'][2]
+            for f in s.fingers.values():
+                if f[2] == 'stick':
+                    dx, dy = f[0] - f[3], f[1] - f[4]
+                    h['left'] |= dx < -sr * .25
+                    h['right'] |= dx > sr * .25
+                    h['up'] |= dy < -sr * .55 and abs(dy) > abs(dx) * .7
+                    h['down'] |= dy > sr * .55 and abs(dy) > abs(dx) * .7
+                elif f[2] in ('jump', 'crouch'):
+                    h[f[2]] = True
         return h
 
     # ---------- touch controls (Android, or the PC with --touch)
@@ -1314,37 +1348,93 @@ class Game:
         if kind == 'up':
             s.fingers.pop(fid, None)
             return
+        f = s.fingers.get(fid)
         if kind == 'move':
-            if fid in s.fingers:
-                s.fingers[fid][:2] = [x, y]
+            if f is None:
+                return
+            f[0], f[1] = x, y
+            if f[2] == 'stick':                                   # the stick base trails the thumb: reversing is instant
+                sr = L['stick'][2]
+                d = math.hypot(x - f[3], y - f[4])
+                if d > sr:
+                    f[3], f[4] = x - (x - f[3]) * sr / d, y - (y - f[4]) * sr / d
+            else:                                                 # slide a thumb from one button onto another
+                a = s.touch_button(x, y, 1.25)
+                if a and a != f[2]:
+                    f[2] = a
+                    s.act.add(a)
+                    s.atk_rep = .32
             return
         if s.state != 'play':                                     # menus use the tap as a normal click
             return
         s.last_input = 'touch'
-        sx, sy, sr = L['stick']
-        if math.hypot(x - sx, y - sy) < sr * 1.8 and not any(f[2] == 'stick' for f in s.fingers.values()):
-            s.fingers[fid] = [x, y, 'stick']
+        a = s.touch_button(x, y, 1.15)                            # right on a button: always that button
+        if a is None and x < W * .45 and not any(g[2] == 'stick' for g in s.fingers.values()):
+            sx, sy, sr = L['stick']                               # floating stick: it appears under the thumb
+            s.fingers[fid] = [x, y, 'stick', max(sr, min(W * .45, x)), max(sr + 20, min(H - sr * .6, y))]
             return
-        best = min((math.hypot(x - bx, y - by) / br, a) for a, (bx, by, br) in L.items() if a != 'stick')
-        if best[0] < 1.3:                                         # nearest button under the finger
-            s.fingers[fid] = [x, y, best[1]]
-            s.act.add(best[1])
+        a = a or s.touch_button(x, y, 1.7)                        # otherwise the nearest button, generously
+        if a:
+            s.fingers[fid] = [x, y, a]
+            s.act.add(a)
+            s.atk_rep = .32
+
+    def touch_button(s, x, y, reach):
+        """The button nearest to (x, y), if within reach * its radius."""
+        best = min((math.hypot(x - bx, y - by) / br, a) for a, (bx, by, br) in s.settings['touch'].items() if a != 'stick')
+        return best[1] if best[0] < reach else None
+
+    def touch_tick(s, dt):
+        """Holding ATTACK keeps swinging."""
+        if any(f[2] == 'atk' for f in s.fingers.values()):
+            s.atk_rep -= dt
+            if s.atk_rep <= 0:
+                s.act.add('atk')
+                s.atk_rep = .2
+
+    @staticmethod
+    def touch_sprite(kind, r, label, state):
+        """Pre-drawn translucent control (cached): drawing a whole-screen alpha layer every frame was slow on phones."""
+        key = (kind, r, label, state)
+        img = _touch.get(key)
+        if img is None:
+            r = int(r)
+            img = pg.Surface((r * 2 + 2, r * 2 + 2), pg.SRCALPHA)
+            c = (r + 1, r + 1)
+            if kind == 'knob':
+                pg.draw.circle(img, (255, 255, 255, 130 if state else 70), c, r)
+            else:
+                fill = {'on': (215, 20, 40, 160), 'dim': (20, 10, 30, 40), 'off': (20, 10, 30, 80)}[state]
+                pg.draw.circle(img, fill, c, r)
+                pg.draw.circle(img, (255, 255, 255, 60 if state == 'dim' else 150), c, r, 2)
+                if label:
+                    t = F_S.render(label, True, WHITE)
+                    t.set_alpha(110 if state == 'dim' else 230)
+                    img.blit(t, (c[0] - t.get_width() // 2, c[1] - t.get_height() // 2))
+            _touch[key] = img = img.convert_alpha()
+        return img
 
     def draw_touch(s):
         """Translucent on-screen controls."""
-        L, lay = s.settings['touch'], s.touch_layer
-        lay.fill((0, 0, 0, 0))
+        L = s.settings['touch']
         down = {f[2] for f in s.fingers.values()}
         sx, sy, sr = L['stick']
-        pg.draw.circle(lay, (20, 10, 30, 70), (sx, sy), sr)
-        pg.draw.circle(lay, (255, 255, 255, 110), (sx, sy), sr, 2)
-        kx, ky = sx, sy
-        for x, y, owner in s.fingers.values():
-            if owner == 'stick':
-                d = math.hypot(x - sx, y - sy) or 1
-                k = min(1, sr / d)
-                kx, ky = sx + (x - sx) * k, sy + (y - sy) * k
-        pg.draw.circle(lay, (255, 255, 255, 120 if 'stick' in down else 70), (kx, ky), sr * .45)
+        kx = ky = None
+        for f in s.fingers.values():
+            if f[2] == 'stick':
+                sx, sy = f[3], f[4]
+                kx, ky = f[0], f[1]
+        sr = int(sr)
+        img = s.touch_sprite('btn', sr, '', 'off' if kx is not None else 'dim')
+        scr.blit(img, (sx - sr - 1, sy - sr - 1))
+        if kx is not None:
+            d = math.hypot(kx - sx, ky - sy) or 1
+            k = min(1, sr / d)
+            kx, ky = sx + (kx - sx) * k, sy + (ky - sy) * k
+        else:
+            kx, ky = sx, sy
+        img = s.touch_sprite('knob', int(sr * .45), '', 'stick' in down)
+        scr.blit(img, (kx - img.get_width() // 2, ky - img.get_height() // 2))
         p = s.pl
         usable = {'super': s.superk >= s.super_need(),
                   'use': bool((s.kiosk and not s.kiosk['used'] and abs(p.x - s.kiosk['x']) < 40) or
@@ -1352,15 +1442,9 @@ class Game:
         for a, (x, y, r) in L.items():
             if a == 'stick':
                 continue
-            on = a in down
-            dim = not usable.get(a, True)
-            fill = (215, 20, 40, 150) if on else ((20, 10, 30, 40) if dim else (20, 10, 30, 80))
-            pg.draw.circle(lay, fill, (x, y), r)
-            pg.draw.circle(lay, (255, 255, 255, 60 if dim else 150), (x, y), r, 2)
-            img = F_S.render(TOUCH_LABELS[a], True, WHITE)
-            img.set_alpha(110 if dim else 230)
-            lay.blit(img, (x - img.get_width() / 2, y - img.get_height() / 2))
-        scr.blit(lay, (0, 0))
+            state = 'on' if a in down else ('dim' if not usable.get(a, True) else 'off')
+            img = s.touch_sprite('btn', int(r), TOUCH_LABELS[a], state)
+            scr.blit(img, (x - img.get_width() // 2, y - img.get_height() // 2))
 
     # ---------- touch layout editor (Settings -> Touch layout)
     TEDIT_BTNS = (("-", pg.Rect(150, 6, 30, 20)), ("+", pg.Rect(186, 6, 30, 20)), ("RESET", pg.Rect(222, 6, 56, 20)),
@@ -1688,6 +1772,7 @@ class Game:
                 s.strings.append((a.x + a.w - 6, a.y - 26, b.x + 6, b.y - 26, 8 + gap * .08, random.randint(2, 4)))
         s.camtop = min(p.y0 - (p.amp if p.axis == 'y' else 0) for p in s.plats) - 70
         s.lamps = list(range(330, LW, 380))
+        s.bake_world()
         s.pl = Player()
         s.pl.hp, s.pl.maxhp = s.hp_keep, s.maxhp
         s.en, s.parts, s.fx, s.coins, s.proj, s.gibs, s.ghosts, s.loot, s.trail = [], [], [], [], [], [], [], [], []
@@ -2488,7 +2573,7 @@ class Game:
                 s.parts.append([pl.x + rx + R(-8, 8), pl.y - 22, R(-30, -10), R(5, 15), 3.0, 3.0,
                                 random.choice(((250, 160, 200), (230, 120, 170))), 1.5, 8, False])
         for vx in s.vents:                                     # steam vents in the street
-            if random.random() < dt * 5:
+            if random.random() < dt * (5 if s.settings['gfx'] else 2.5) and abs(vx - s.cam - W / 2) < W * .7:
                 s.parts.append([vx + R(-3, 3), GY - 2, R(-8, 8), R(-60, -30), 1.2, 1.2, (150, 130, 170), R(3, 6), -15, 2])
         cx, cy = p.x + p.w / 2, p.y + p.h / 2
         for c in s.coins[:]:
@@ -2528,7 +2613,7 @@ class Game:
                 q[2] *= .96
             if q[1] > GY:
                 q[1], q[3], q[2] = GY, 0, q[2] * .5
-        s.parts = [q for q in s.parts if q[4] > 0]
+        s.parts = [q for q in s.parts if q[4] > 0][-(120 if s.settings['gfx'] == 0 else 220 if s.settings['gfx'] == 1 else 600):]
         for gb in s.gibs:
             gb[3] += GRAV * dt
             gb[0] += gb[2] * dt
@@ -2582,6 +2667,8 @@ class Game:
             T.blit(m.to_surface(setcolor=(255, 255, 255, 255), unsetcolor=(0, 0, 0, 0)), (sx, sy))
             return
         T.blit(D, (sx, sy))
+        if target is None and not s.settings['gfx']:            # LOW graphics: in-game sprites skip the rim light
+            return
         side = m.copy()
         side.erase(m, (1, 0))
         side2 = m.copy()
@@ -2800,26 +2887,31 @@ class Game:
                     x, y = x + rnd.uniform(-14, 14), y + rnd.uniform(10, 22)
                     pts.append((x, y))
                 pg.draw.lines(scr, (230, 220, 255), False, pts, 2)
-        for i, bx in enumerate((60, 230, 400)):                 # sweeping searchlights
-            a = math.radians(90 + math.sin(s.t * .4 + i * 2.1) * 35)
-            img = pg.transform.rotate(L['beam'], math.degrees(a))
+        hi = s.settings['gfx'] >= 1                            # LOW graphics skips the decorative sky extras
+        for i, bx in enumerate((60, 230, 400) if hi else ()):   # sweeping searchlights
+            deg = int(90 + math.sin(s.t * .4 + i * 2.1) * 35)
+            img = _beams.get(deg)
+            if img is None:                                     # rotations are cached per whole degree
+                img = _beams[deg] = pg.transform.rotate(L['beam'], deg).convert()
+            a = math.radians(deg)
             ox, oyy = (bx - cam * .15) % (W + 120) - 60, GY - 40 + oy * .15
             scr.blit(img, img.get_rect(center=(ox + math.cos(a) * 120, oyy - math.sin(a) * 120)), special_flags=pg.BLEND_RGB_ADD)
         s.blimp += dt * 8                                       # advertising blimp
-        bx = (s.blimp - cam * .08) % (W + 240) - 120
-        by = 34 + oy * .08 + math.sin(s.t * .5) * 3
-        pg.draw.ellipse(scr, (40, 30, 62), (bx, by, 96, 26))
-        pg.draw.arc(scr, (110, 90, 160), (bx, by, 96, 26), .4, 2.7, 1)
-        pg.draw.polygon(scr, (40, 30, 62), [(bx + 2, by + 13), (bx - 8, by + 4), (bx - 8, by + 22)])
-        scr.fill((6, 4, 12), (bx + 20, by + 7, 56, 12))
-        msg = F_JP.render("ネオン浪人 ◆ NEO TOKYO ◆ 新宿 ◆ ", False, hue(s.t * 40))
-        off = int(s.t * 20) % msg.get_width()
-        scr.blit(msg, (bx + 21, by + 7), (off, 0, 54, 12))
-        scr.blit(msg, (bx + 21 + msg.get_width() - off, by + 7), (0, 0, max(0, 54 - (msg.get_width() - off)), 12))
-        if int(s.t * 2) % 2:
-            glow(scr, bx - 6, by + 13, 6, (90, 0, 0))
+        if hi:
+            bx = (s.blimp - cam * .08) % (W + 240) - 120
+            by = 34 + oy * .08 + math.sin(s.t * .5) * 3
+            pg.draw.ellipse(scr, (40, 30, 62), (bx, by, 96, 26))
+            pg.draw.arc(scr, (110, 90, 160), (bx, by, 96, 26), .4, 2.7, 1)
+            pg.draw.polygon(scr, (40, 30, 62), [(bx + 2, by + 13), (bx - 8, by + 4), (bx - 8, by + 22)])
+            scr.fill((6, 4, 12), (bx + 20, by + 7, 56, 12))
+            msg = rtext(F_JP, "ネオン浪人 ◆ NEO TOKYO ◆ 新宿 ◆ ", hue(int(s.t * 40 / 30) * 30))
+            off = int(s.t * 20) % msg.get_width()
+            scr.blit(msg, (bx + 21, by + 7), (off, 0, 54, 12))
+            scr.blit(msg, (bx + 21 + msg.get_width() - off, by + 7), (0, 0, max(0, 54 - (msg.get_width() - off)), 12))
+            if int(s.t * 2) % 2:
+                glow(scr, bx - 6, by + 13, 6, (90, 0, 0))
         scr.blit(L['far'], (-int(cam * .15), int(oy * .15)))
-        for i in range(4):                                      # drones
+        for i in range(4 if hi else 0):                         # drones
             dxp = (i * 137 + s.t * (18 + i * 7)) % (W + 40) - 20
             dyp = 70 + i * 16 + math.sin(s.t * 1.3 + i) * 8 + oy * .3
             scr.fill((20, 14, 30), (dxp - 2, dyp, 5, 2))
@@ -2847,7 +2939,8 @@ class Game:
             glow(scr, tx - 2, ty - 9, 18, (120, 120, 100))
             if tx < -320:
                 s.train, s.trainT = None, R(10, 18)
-        scr.blit(L['haze'], (0, int(oy * .5)))
+        if hi:
+            scr.blit(L['haze'], (0, int(oy * .5)))
         scr.blit(L['near'], (-int(cam * .7), int(oy * .7)))
 
     def draw_rain(s, gys):
@@ -3007,12 +3100,14 @@ class Game:
             pg.draw.line(scr, (40, 32, 58), (x, y - 16), (x + 6, y - 16))
             if int(s.t * 1.5 + x) % 2:
                 scr.fill((255, 40, 40), (x + 3, y - 23, 1, 2))
-                glow(scr, x + 3, y - 22, 6, (90, 0, 0))
+                if s.settings['gfx']:
+                    glow(scr, x + 3, y - 22, 6, (90, 0, 0))
         elif kind == 'sakura':                                  # cherry tree swaying in the wind
             sw = math.sin(s.t * 1.3 + x * .1) * 1.5
             pg.draw.line(scr, (50, 26, 34), (x + 6, y), (x + 6 + sw * .4, y - 14), 3)
             pg.draw.line(scr, (50, 26, 34), (x + 6, y - 9), (x + 12 + sw * .6, y - 16), 2)
-            glow(scr, x + 7 + sw, y - 20, 22, (60, 20, 40))
+            if s.settings['gfx']:
+                glow(scr, x + 7 + sw, y - 20, 22, (60, 20, 40))
             for ox_, oy_, r in ((-5, -18, 6), (5, -21, 7), (0, -26, 6), (11, -17, 5), (-1, -14, 4)):
                 pg.draw.circle(scr, (200, 90, 140), (x + 6 + ox_ + sw, y + oy_), r)
                 pg.draw.circle(scr, (250, 160, 200), (x + 5 + ox_ + sw, y + oy_ - 2), max(1, r - 3))
@@ -3021,15 +3116,17 @@ class Game:
                 pg.draw.line(scr, (190, 30, 40), (px, y), (px, y - 12), 2)
             pg.draw.line(scr, (30, 8, 12), (x - 3, y - 13), (x + 15, y - 13), 2)
             pg.draw.line(scr, (190, 30, 40), (x - 1, y - 9), (x + 13, y - 9))
-            glow(scr, x + 6, y - 4, 8, (70, 30, 10))
+            if s.settings['gfx']:
+                glow(scr, x + 6, y - 4, 8, (70, 30, 10))
             scr.fill((255, 200, 120), (x + 5, y - 3, 2, 3))
         elif kind == 'board':                                   # big rooftop billboard with scrolling text
             for px in (x + 6, x + 34):
                 pg.draw.line(scr, (30, 24, 44), (px, y), (px, y - 10), 2)
             pg.draw.rect(scr, (8, 4, 14), (x, y - 32, 42, 22))
-            glow(scr, x + 21, y - 21, 30, tuple(c // 4 for c in col))
+            if s.settings['gfx']:
+                glow(scr, x + 21, y - 21, 30, tuple(c // 4 for c in col))
             pg.draw.rect(scr, col, (x, y - 32, 42, 22), 1)
-            msg = F_JP.render("ネオン浪人 新宿 未来 ", False, col)
+            msg = rtext(F_JP, "ネオン浪人 新宿 未来 ", col)
             off = int(s.t * 25 + x) % msg.get_width()
             scr.blit(msg, (x + 2, y - 28), (off, 0, 38, 14))
             if msg.get_width() - off < 38:
@@ -3040,22 +3137,80 @@ class Game:
             pg.draw.rect(scr, (10, 4, 16), (x, y - 20, 19, 12))
             if not (int(s.t * 7 + x) % 23 == 0):                # neon flicker
                 pg.draw.rect(scr, col, (x, y - 20, 19, 12), 1)
-                glow(scr, x + 9, y - 14, 14, tuple(c // 4 for c in col))
+                if s.settings['gfx']:
+                    glow(scr, x + 9, y - 14, 14, tuple(c // 4 for c in col))
                 scr.fill(col, (x + 4, y - 16, 11, 2))
 
-    def draw_plat(s, p, cx, oy):
+    def bake_world(s):
+        """Pre-draw everything in a district that never moves (towers, facades, lamp posts, rooftop slabs)
+        into two big colour-keyed layers, so each frame is two blits instead of hundreds of draw calls."""
+        global scr
+        top = int(s.camtop) - 40
+        s.bake_org = (-60, top)
+        size = (LW + 120, GY - top + 2)
+        live = scr
+        s.back_layer, s.plat_layer = (pg.Surface(size).convert() for _ in range(2))
+        try:
+            cx, oy = -60, -top
+            gys = GY + oy
+            scr = s.back_layer
+            scr.fill(KEY)
+            for lx in s.lamps:                              # tall street lamps (pole silhouettes)
+                x = lx - cx
+                sil_poly(scr, [(x - 1, gys), (x + 2, gys), (x + 2, gys - 100), (x - 1, gys - 100)], (10, 4, 16), (90, 50, 60))
+                pg.draw.line(scr, (10, 4, 16), (x, gys - 100), (x + 12, gys - 102), 2)
+                pg.draw.rect(scr, (255, 210, 140), (x + 8, gys - 101, 8, 10))
+                pg.draw.rect(scr, (90, 30, 20), (x + 8, gys - 101, 8, 10), 1)
+            for tx, tw, ttop, wins, col in s.towers:        # skyscraper bodies behind their zig-zag floors
+                x, y = tx - cx, ttop + oy
+                pg.draw.rect(scr, (15, 7, 28), (x, y, tw, gys - y))
+                pg.draw.line(scr, (80, 40, 110), (x, y), (x, gys))
+                pg.draw.line(scr, (80, 40, 110), (x + tw - 1, y), (x + tw - 1, gys))
+                pg.draw.line(scr, col, (x, y), (x + tw, y))
+                for wx, wy, wc in wins:
+                    scr.fill(wc, (x + wx, y + wy, 3, 4))
+            for sx0, sx1, stop in s.scaffolds:              # scaffolding poles and cross braces
+                for px in range(int(sx0), int(sx1) + 1, 29):
+                    x = px - cx
+                    pg.draw.line(scr, (52, 40, 70), (x, stop + oy), (x, gys), 2)
+                    for py in range(int(stop), GY, 27):
+                        pg.draw.line(scr, (34, 26, 48), (x, py + oy), (x + 29, py + 27 + oy))
+            for p in s.plats[1:]:                           # building facades below the low rooftops
+                if p.win:
+                    x, y = p.x - cx, p.y + oy
+                    pg.draw.rect(scr, (17, 8, 30), (x + 3, y + 8, p.w - 6, gys - y - 8))
+                    pg.draw.line(scr, (70, 36, 100), (x + 3, y + 8), (x + 3, gys))
+                    pg.draw.line(scr, (70, 36, 100), (x + p.w - 4, y + 8), (x + p.w - 4, gys))
+                    for wx, wy, col in p.win:
+                        scr.fill(tuple(c // 2 for c in col), (x + wx, y + wy, 4, 4))
+            s.draw_torii(END_X - cx, oy)
+            scr = s.plat_layer
+            scr.fill(KEY)
+            for p in s.plats[1:]:
+                if p.kind == 'static':
+                    s.draw_plat(p, cx, oy, bake=True)
+        finally:
+            scr = live
+        for lay in (s.back_layer, s.plat_layer):
+            lay.set_colorkey(KEY, pg.RLEACCEL)
+
+    def draw_plat(s, p, cx, oy, bake=False):
         x, y, w = p.x - cx, p.y + oy, p.w
-        if x > W + 20 or x + w < -20 or y > H + 30 or y < -40:
+        if not bake and (x > W + 20 or x + w < -20 or y > H + 30 or y < -40):
             return
-        if p.kind == 'static':
+        if p.kind == 'static' and not bake:                     # the slab itself is in the baked layer
             for kind, rx, col in p.props:
                 s.draw_prop(kind, x + rx, y, col)
+            if s.settings['gfx']:
+                glow(scr, x + w / 2, y + 9, int(w / 2), (40, 6, 26), .2)
+                if p.deco:
+                    glow(scr, x + w * .7 + 6, y + 19, 14, tuple(c // 4 for c in p.deco[1]))
+        elif p.kind == 'static':
             for sx in range(int(x) + 4, int(x + w) - 2, 18):
                 pg.draw.line(scr, (24, 10, 34), (sx, y + 8), (sx, y + 16))
             pg.draw.rect(scr, (20, 8, 34), (x, y, w, 8))
             pg.draw.line(scr, (40, 20, 62), (x, y + 3), (x + w, y + 3))
             pg.draw.line(scr, (255, 40, 140), (x, y + 8), (x + w, y + 8))
-            glow(scr, x + w / 2, y + 9, int(w / 2), (40, 6, 26), .2)
             pg.draw.line(scr, (0, 60, 80), (x, y - 1), (x + w, y - 1))
             pg.draw.line(scr, (0, 230, 255), (x, y), (x + w, y))
             if p.deco:
@@ -3065,7 +3220,6 @@ class Game:
                 pg.draw.rect(scr, (10, 3, 15), (sx, y + 12, 13, 15))
                 pg.draw.rect(scr, col, (sx, y + 12, 13, 15), 1)
                 scr.blit(F_JP.render(ch, False, col), (sx + 1, y + 13))
-                glow(scr, sx + 6, y + 19, 14, tuple(c // 4 for c in col))
         elif p.kind == 'move':
             if p.axis == 'y':
                 pg.draw.line(scr, (30, 22, 46), (x + w / 2, p.y0 - p.amp - 30 + oy), (x + w / 2, y))
@@ -3087,7 +3241,7 @@ class Game:
             if p.crumbleT > 0 or not p.solid:
                 pg.draw.lines(scr, (20, 10, 10), False, [(x + w * .3, y), (x + w * .4, y + 3), (x + w * .55, y + 2), (x + w * .6, y + 6)])
 
-    def reflect(s, gys):
+    def reflect(s, gys, lite=False):
         """Wet-street reflection: mirror everything just above the ground, with ripples."""
         fh = H - gys
         if fh <= 0:
@@ -3096,6 +3250,10 @@ class Game:
         src = pg.transform.flip(scr.subsurface((0, top, W, gys - top)).copy(), False, True)
         src.fill((150, 130, 175), special_flags=pg.BLEND_RGB_MULT)
         scr.fill((6, 3, 12), (0, gys, W, fh))
+        if lite:                                        # LOW graphics: one plain mirror blit, no ripples
+            scr.blit(src, (0, gys), (0, 0, W, min(fh, gys - top)))
+            scr.blit(s.L['floor'], (0, gys))
+            return
         for y in range(min(fh, gys - top)):
             off = math.sin(y * .9 + s.t * 5) * (.5 + y * .04)
             scr.blit(src, (off, gys + y), (0, y, W, 1))
@@ -3103,13 +3261,16 @@ class Game:
 
     def draw_coin(s, x, y, mythic, ph):
         sw = abs(math.cos(s.t * 4 + ph))
+        lite = not s.settings['gfx']
         if mythic:
             h = s.t * 220 + ph * 60
-            glow(scr, x, y, 12, hue(int(h // 30) * 30, .45))
+            if not lite:
+                glow(scr, x, y, 12, hue(int(h // 30) * 30, .45))
             pg.draw.ellipse(scr, hue(h), (x - max(1, sw * 4), y - 4, max(2, sw * 8), 8))
             pg.draw.ellipse(scr, (255, 255, 255), (x - max(1, sw * 1.5), y - 2, max(2, sw * 3), 3))
         else:
-            glow(scr, x, y, 7, (50, 35, 5))
+            if not lite:
+                glow(scr, x, y, 7, (50, 35, 5))
             pg.draw.ellipse(scr, (150, 95, 15), (x - max(1, sw * 3), y - 3, max(2, sw * 6), 6))
             pg.draw.ellipse(scr, (255, 205, 50), (x - max(1, sw * 2), y - 2, max(2, sw * 4), 4))
 
@@ -3119,41 +3280,11 @@ class Game:
         oy = (int(R(-sh, sh)) if sh > 0 else 0) - int(s.camy)
         cx = int(s.cam) - ox
         gys = GY + oy
+        lite = not s.settings['gfx']
         s.draw_bg(cx, oy)
-        for lx in s.lamps:                              # tall street lamps (pole silhouettes)
-            x = lx - cx
-            if -60 < x < W + 60:
-                sil_poly(scr, [(x - 1, gys), (x + 2, gys), (x + 2, gys - 100), (x - 1, gys - 100)], (10, 4, 16), (90, 50, 60))
-                pg.draw.line(scr, (10, 4, 16), (x, gys - 100), (x + 12, gys - 102), 2)
-                pg.draw.rect(scr, (255, 210, 140), (x + 8, gys - 101, 8, 10))
-                pg.draw.rect(scr, (90, 30, 20), (x + 8, gys - 101, 8, 10), 1)
-        for tx, tw, ttop, wins, col in s.towers:        # skyscraper bodies behind their zig-zag floors
-            x, y = tx - cx, ttop + oy
-            if -tw < x < W:
-                pg.draw.rect(scr, (15, 7, 28), (x, y, tw, gys - y))
-                pg.draw.line(scr, (80, 40, 110), (x, y), (x, gys))
-                pg.draw.line(scr, (80, 40, 110), (x + tw - 1, y), (x + tw - 1, gys))
-                pg.draw.line(scr, col, (x, y), (x + tw, y))
-                for wx, wy, wc in wins:
-                    scr.fill(wc, (x + wx, y + wy, 3, 4))
-        for sx0, sx1, stop in s.scaffolds:              # scaffolding poles and cross braces
-            for px in range(int(sx0), int(sx1) + 1, 29):
-                x = px - cx
-                if -10 < x < W + 10:
-                    pg.draw.line(scr, (52, 40, 70), (x, stop + oy), (x, gys), 2)
-                    for py in range(int(stop), GY, 27):
-                        pg.draw.line(scr, (34, 26, 48), (x, py + oy), (x + 29, py + 27 + oy))
-        for p in s.plats[1:]:                           # building facades below the low rooftops
-            if p.win:
-                x, y = p.x - cx, p.y + oy
-                if -p.w < x < W:
-                    pg.draw.rect(scr, (17, 8, 30), (x + 3, y + 8, p.w - 6, gys - y - 8))
-                    pg.draw.line(scr, (70, 36, 100), (x + 3, y + 8), (x + 3, gys))
-                    pg.draw.line(scr, (70, 36, 100), (x + p.w - 4, y + 8), (x + p.w - 4, gys))
-                    for wx, wy, col in p.win:
-                        scr.fill(tuple(c // 2 for c in col), (x + wx, y + wy, 4, 4))
+        bx, by = s.bake_org[0] - cx, s.bake_org[1] + oy  # lamp posts, towers, scaffolds, facades, torii (pre-drawn)
+        scr.blit(s.back_layer, (bx, by))
         s.draw_door(s.door, cx, oy)
-        s.draw_torii(END_X - cx, oy)
         if END_X - cx < W + 40:                         # exit sign above the torii
             a = .6 + math.sin(s.t * 4) * .4
             outlined("出口  EXIT >>", F_JP, qcol((255, 140, 160), a), END_X - cx, gys - 98, center=True, r=1)
@@ -3179,6 +3310,7 @@ class Game:
         for e in s.en:                                  # enemies climbing/dropping behind the rooftops
             if e.trav:
                 s.draw_enemy(e, cx, oy)
+        scr.blit(s.plat_layer, (bx, by))   # rooftop slabs (pre-drawn)
         for p in s.plats[1:]:
             s.draw_plat(p, cx, oy)
         for x1, y1, x2, y2, sag, n in s.strings:        # paper lantern strings between rooftops
@@ -3191,7 +3323,8 @@ class Game:
                 sway = math.sin(s.t * 2 + i) * 1
                 pg.draw.ellipse(scr, (230, 50, 50), (lx - 3 + sway, ly + 2, 6, 7))
                 scr.fill((255, 200, 120), (lx - 1 + sway, ly + 4, 2, 3))
-                glow(scr, lx + sway, ly + 5, 10, (70, 14, 10))
+                if not lite:
+                    glow(scr, lx + sway, ly + 5, 10, (70, 14, 10))
         for c in s.coins:
             x = c[0] - cx
             if -12 < x < W + 12:
@@ -3201,7 +3334,7 @@ class Game:
                     s.burst(c[0] + R(-4, 4), c[1] + R(-4, 4), 1, hue(s.t * 220), spd=10, life=(.3, .6), grav=-20, glowing=True)
         for l in s.loot:
             x, y = l[0] - cx, l[1] + oy
-            if l[5] > .55:
+            if l[5] > .55 and not lite:
                 glow(scr, x, y, 10, (60, 45, 10))
             s.draw_coin(x, y, l[4], l[5] * 3)
         for gb in s.gibs:
@@ -3268,23 +3401,26 @@ class Game:
                 glow(scr, x, y - 4, 40, qcol((40, 70, 100), k), .5)
         for q in s.parts:
             x, y = q[0] - cx, q[1] + oy
+            if not -16 < x < W + 16:
+                continue
             if q[9] == 2:                               # smoke puff
                 k = q[4] / q[5]
                 r = max(1, int(q[7] * (1.6 - k)))
                 img = smoke_img(r, int(k * 6) * 25 + 20, q[6])
                 scr.blit(img, (x - r - 1, y - r - 1))
                 continue
-            if q[9]:
+            if q[9] and not lite:
                 glow(scr, x, y, 4, tuple(c // 3 for c in q[6]))
             scr.fill(q[6], (x, y, q[7], q[7]))
         for lx in s.lamps:                              # lamp light falls on everything in front
             x = lx - cx
             if -60 < x < W + 60:
                 scr.blit(s.L['cone'], (x + 12 - 45, gys - 92), special_flags=pg.BLEND_RGB_ADD)
-                glow(scr, x + 12, gys - 96, 46, (80, 50, 25))
-        s.reflect(gys)
+                if not lite:
+                    glow(scr, x + 12, gys - 96, 46, (80, 50, 25))
+        s.reflect(gys, lite)
         if gys < H:
-            for lx in s.lamps:                          # light pools on the wet street
+            for lx in (() if lite else s.lamps):        # light pools on the wet street
                 x = lx - cx
                 if -60 < x < W + 60:
                     glow(scr, x + 12, gys + 6, 50, (60, 40, 20), .22)
@@ -3294,7 +3430,8 @@ class Game:
             for yy in (6, 14, 26, 42):
                 pg.draw.line(scr, (18, 8, 28), (0, gys + yy), (W, gys + yy))
             pg.draw.line(scr, (255, 60, 160), (0, gys), (W, gys))
-            glow(scr, W / 2, gys + 1, 240, (30, 8, 26), .03)
+            if not lite:
+                glow(scr, W / 2, gys + 1, 240, (30, 8, 26), .03)
         s.draw_rain(gys)
         scr.blit(s.L['fg'], (-int(cx * 1.25), int(oy * 1.25)))
         if s.superT >= 0:                               # super: the world goes dark, only you and the blade glow
@@ -3574,8 +3711,9 @@ class Game:
         text(MENU_HINT[s.last_input == 'pad'], F_S, (220, 210, 240), W // 2, H - 13, True)
 
     SETTING_ROWS = [('SOUND', 'MASTER VOLUME', 'master', 'slider'), ('', 'MUSIC', 'music', 'slider'),
-                    ('', 'EFFECTS', 'sfx', 'slider'), ('VIDEO', 'FULLSCREEN', 'fullscreen', 'toggle'),
-                    ('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain'),
+                    ('', 'EFFECTS', 'sfx', 'slider'), ('VIDEO', 'GRAPHICS', 'gfx', 'gfx'),
+                    ('', 'SHOW FPS', 'fps', 'toggle')] + ([] if ANDROID else [('', 'FULLSCREEN', 'fullscreen', 'toggle')]) + \
+                   [('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain'),
                     ('', 'CRT FILTER', 'crt', 'toggle'), ('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'),
                     ('', 'CONTROLS', None, 'open')] + ([('', 'TOUCH LAYOUT', None, 'touch')] if TOUCH else []) + \
                    [('', 'BACK', None, 'back')]
@@ -3595,6 +3733,8 @@ class Game:
             st[key] = not st[key]
         elif kind == 'rain':
             st[key] = (st[key] + (delta or 1)) % len(RAIN_LEVELS)
+        elif kind == 'gfx':
+            st[key] = (st[key] + (delta or 1)) % len(GFX_LEVELS)
         elif kind == 'open':
             s.wipe_to(lambda: s.go('controls', 0))
             return
@@ -3619,7 +3759,7 @@ class Game:
         s.nav(len(rows))
         row = rows[s.sel]
         if 'left' in s.act or 'right' in s.act:
-            if row[3] in ('slider', 'toggle', 'rain'):
+            if row[3] in ('slider', 'toggle', 'rain', 'gfx'):
                 s.change_setting(row, 1 if 'right' in s.act else -1)
         if 'ok' in s.act:
             s.change_setting(row, 1)
@@ -3628,7 +3768,7 @@ class Game:
         mx, my = pg.mouse.get_pos()
         for i, (sec, lab, key, kind) in enumerate(rows):
             a = ease((el - .05 - i * .04) * 4)
-            x, y, w = 120 + int((1 - a) * 380) - i * 2, 54 + i * 19, 330
+            x, y, w = 120 + int((1 - a) * 380) - i * 2, 50 + i * min(19, 196 // len(rows)), 330
             on = i == s.sel
             r = pg.Rect(x - 6, y - 1, w, 17)
             vx = x + 170                                        # value area
@@ -3661,12 +3801,13 @@ class Game:
                     scr.fill((RED if on else (0, 200, 230)) if filled else ((60, 50, 70) if not on else (190, 180, 200)),
                              (vx + b * 12, y + 4, 10, 9))
                 label(f"{int(v * 100)}%", on, vx + 124, y + 3)
-            elif kind in ('toggle', 'rain'):
-                val = RAIN_LEVELS[s.settings[key]][0] if kind == 'rain' else ("ON" if s.settings[key] else "OFF")
+            elif kind in ('toggle', 'rain', 'gfx'):
+                val = (RAIN_LEVELS[s.settings[key]][0] if kind == 'rain' else GFX_LEVELS[s.settings[key]] if kind == 'gfx'
+                       else ("ON" if s.settings[key] else "OFF"))
                 img = F_PS.render(val, False, WHITE)
                 tw = img.get_width() + 14
                 tx = vx + 60 - tw // 2
-                pg.draw.polygon(scr, RED if (kind == 'rain' or s.settings[key]) else (70, 60, 80),
+                pg.draw.polygon(scr, RED if (kind in ('rain', 'gfx') or s.settings[key]) else (70, 60, 80),
                                 [(tx, y), (tx + tw, y - 1), (tx + tw - 4, y + 16), (tx - 4, y + 17)])
                 scr.blit(img, (tx + 7, y - 1))
                 if on:
@@ -3798,7 +3939,8 @@ class Game:
         pg.draw.rect(scr, RED, frame.move(6, 5))
         scr.set_clip(frame)
         vgrad_rect(scr, frame, (40, 22, 60), (10, 6, 18))
-        city = s.L['mid'].subsurface((int(s.t * 6) % 600, GY - 170, 160, 170))   # the city behind him, out of focus
+        city = pg.Surface((160, 170), pg.SRCALPHA)                  # the city behind him, out of focus
+        city.blit(s.L['mid'], (0, 0), (int(s.t * 6) % 600, GY - 170, 160, 170))   # (no subsurface: the layer is RLE)
         bg = pg.transform.smoothscale(pg.transform.smoothscale(city, (32, 34)), frame.size)
         bg.set_alpha(140)
         scr.blit(bg, frame)
@@ -4141,6 +4283,8 @@ class Game:
         if 'pause' in s.act:
             s.go('pause', 0)
             s.music_volume()
+        if TOUCH:
+            s.touch_tick(dt)
         s.update(dt)
         s.draw_world(overlay=False)
         s.zoom_view(*s.camera())                                  # anime camera moves (zoom / tilt)
@@ -4246,6 +4390,8 @@ class Game:
                     s.quit()
                 s.handle_event(ev)
             s.frame(dt)
+            if s.settings['fps']:
+                outlined(f"{clock.get_fps():.0f} FPS", F_S, (120, 255, 140), W - 4 - F_S.size("00 FPS")[0], 3, r=1)
             pg.display.flip()
 
     def frame(s, dt):
