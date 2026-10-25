@@ -7,7 +7,8 @@ source.include_exts = py,png,wav,ttf
 source.include_patterns = assets/*,assets/fonts/*
 source.exclude_dirs = bin,.buildozer,.github
 version = 1.0
-requirements = python3,pygame
+# Python 3.10: the pygame recipe of python-for-android doesn't compile against 3.11 (longintrepr.h moved)
+requirements = python3==3.10.12,hostpython3==3.10.12,pygame
 orientation = landscape
 fullscreen = 1
 icon.filename = %(source.dir)s/icon.png
