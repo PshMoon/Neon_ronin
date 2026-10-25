@@ -1,0 +1,52 @@
+# Builds the Android APK on GitHub's servers. Runs on every upload (push) or by hand from the Actions tab.
+# When it finishes: open the run -> "Artifacts" -> download "NeonRonin-apk" (a zip with the .apk inside).
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          pip install --upgrade pip setuptools
+          pip install buildozer "cython<3"
+
+      # Android has no Windows fonts: bundle two open-licensed (SIL OFL) Google fonts with Japanese / display glyphs
+      - name: Fonts
+        run: |
+          mkdir -p assets/fonts
+          curl -fL -o assets/fonts/DotGothic16-Regular.ttf https://github.com/google/fonts/raw/main/ofl/dotgothic16/DotGothic16-Regular.ttf
+          curl -fL -o assets/fonts/Anton-Regular.ttf https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf
+
+      - name: Cache Android SDK / NDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+
+      - name: Build
+        run: yes | buildozer -v android debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NeonRonin-apk
+          path: bin/*.apk
