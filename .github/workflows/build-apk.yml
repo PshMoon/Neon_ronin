@@ -1,5 +1,5 @@
 # Builds the Android APK on GitHub's servers. Runs on every upload (push) or by hand from the Actions tab.
-# When it finishes: open the run -> "Artifacts" -> download "NeonRonin-apk" (a zip with the .apk inside).
+# When it finishes: the APK is on the repository's Releases page (and under the run's "Artifacts").
 name: Build APK
 
 on:
@@ -7,20 +7,20 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write          # lets the build publish the APK as a release (a plain download link)
+  contents: write          # lets the build publish the APK (or its error log) as a release - a plain download link
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -47,7 +47,10 @@ jobs:
           key: buildozer-${{ hashFiles('buildozer.spec') }}
 
       - name: Build
-        run: yes | buildozer -v android debug
+        shell: bash
+        run: |
+          set -o pipefail
+          yes | buildozer -v android debug 2>&1 | tee build.log
 
       - uses: actions/upload-artifact@v4
         with:
@@ -60,3 +63,18 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: Neon Ronin (build ${{ github.run_number }})
           files: bin/*.apk
+
+      # if anything breaks, publish the end of the build log so it can be read without logging in
+      - name: Publish the error log
+        if: failure()
+        shell: bash
+        run: tail -n 400 build.log > build-error.log || echo "no build.log" > build-error.log
+
+      - name: Upload the error log
+        if: failure()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: log-${{ github.run_number }}
+          name: Build log ${{ github.run_number }} (failed)
+          prerelease: true
+          files: build-error.log
