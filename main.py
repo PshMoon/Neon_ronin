@@ -22,7 +22,8 @@ SETTINGS_FILE = os.path.join(SAVE_DIR, 'settings.json')
 ASSETS = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'assets')
 DEFAULT_SETTINGS = {'master': .8, 'music': .6, 'sfx': .8, 'fullscreen': False, 'shake': True,
                     'rain': 0 if ANDROID else 1, 'crt': not ANDROID, 'rumble': True,
-                    'gfx': 0 if ANDROID else 2, 'fps': False, 'float_stick': True, 'touch_alpha': .8}       # gfx: graphics quality 0 LOW .. 2 HIGH
+                    'gfx': 0 if ANDROID else 2, 'fps': False, 'float_stick': True, 'touch_alpha': .8,
+                    'tcal': None}      # tcal: touch calibration [ax, bx, ay, by]: game x = ax * finger x + bx (same for y)       # gfx: graphics quality 0 LOW .. 2 HIGH
 RAIN_LEVELS = (("LIGHT", 35), ("MEDIUM", 70), ("HEAVY", 120))
 GFX_LEVELS = ("LOW", "MEDIUM", "HIGH")
 # on-screen controls: action -> [x, y, radius] in game pixels (480x270). The player can move/resize them in settings.
@@ -1235,13 +1236,15 @@ class Game:
             pg.mixer.set_reserved(2)                         # channels 0+1: the two music layers
         s.new_run()
         s.go('menu')
+        if ANDROID and not s.settings['tcal']:                  # first launch on a phone: calibrate the touch screen
+            s.start_tcal('menu')
 
     def go(s, state, fade=.6):
         s.state, s.state_t, s.sel, s.fade = state, s.t, 0, fade
         s.armed = None
         if state != 'play':
             s.fingers = {}                                     # no stuck touch buttons across screens
-        menus = ('menu', 'stats', 'settings', 'controls', 'skins', 'exit', 'victory')
+        menus = ('menu', 'stats', 'settings', 'controls', 'skins', 'exit', 'victory', 'tcal')
         s.play_music('menu' if state in menus else 'fight')
 
     # ---------- settings, music, input
@@ -1357,6 +1360,9 @@ class Game:
     def to_logical(s, nx, ny):
         """Finger position -> game pixels. Newer SDL already gives fingers as 0..1 of the game screen
         ('direct'); older SDL gives 0..1 of the whole window, letterbox bars included ('window')."""
+        cal = s.settings['tcal']
+        if cal:                                                 # measured on this phone (Settings -> CALIBRATE TOUCH)
+            return cal[0] * nx + cal[1], cal[2] * ny + cal[3]
         if s.touch_map == 'direct':
             return nx * W, ny * H
         ww, wh = pg.display.get_window_size()
@@ -1366,7 +1372,7 @@ class Game:
     def touch_calibrate(s):
         """Phones also send a fake mouse click for a tap, already mapped to the game screen by SDL.
         When a finger-down and that click arrive in the same frame, keep the finger mapping that agrees with it."""
-        if s.fnorm is None or s.mpos is None:
+        if s.fnorm is None or s.mpos is None or s.settings['tcal']:
             return
         err = {}
         for mode in ('direct', 'window'):
@@ -1508,6 +1514,48 @@ class Game:
             s.drag = None
             s.save_settings()
 
+    # ---------- touch calibration: two taps measure how this phone's touch screen maps onto the game
+    TCAL_PTS = ((60, 50), (W - 60, H - 50))
+
+    def start_tcal(s, after):
+        s.tcal_raw, s.tcal_after = [], after
+        s.go('tcal', 0)
+
+    def tcal_tap(s, nx, ny):
+        s.tcal_raw.append((nx, ny))
+        sfx('sel')
+        if len(s.tcal_raw) < 2:
+            return
+        (n1x, n1y), (n2x, n2y) = s.tcal_raw
+        (x1, y1), (x2, y2) = s.TCAL_PTS
+        if abs(n2x - n1x) < .2 or abs(n2y - n1y) < .2:             # taps too close together: try again
+            s.tcal_raw = []
+            sfx('deny')
+            return
+        ax, ay = (x2 - x1) / (n2x - n1x), (y2 - y1) / (n2y - n1y)
+        s.settings['tcal'] = [ax, x1 - ax * n1x, ay, y1 - ay * n1y]
+        s.save_settings()
+        sfx('buy')
+        nxt = s.tcal_after
+        s.wipe_to(lambda: s.go(nxt, 0))
+
+    def st_tcal(s, dt):
+        scr.fill((6, 3, 12))
+        i = min(len(s.tcal_raw), 1)
+        x, y = s.TCAL_PTS[i]
+        pulse = 10 + math.sin(s.t * 6) * 3
+        pg.draw.circle(scr, RED, (x, y), int(pulse + 6), 2)
+        pg.draw.circle(scr, WHITE, (x, y), 3)
+        pg.draw.line(scr, WHITE, (x - 18, y), (x - 7, y), 2)
+        pg.draw.line(scr, WHITE, (x + 7, y), (x + 18, y), 2)
+        pg.draw.line(scr, WHITE, (x, y - 18), (x, y - 7), 2)
+        pg.draw.line(scr, WHITE, (x, y + 7), (x, y + 18), 2)
+        outlined("TOUCH CALIBRATION", F_PM, WHITE, W // 2, 104, center=True, r=1)
+        text(f"tap the exact center of the target  ({i + 1} / 2)", F_S, (230, 220, 245), W // 2, 132, True)
+        text("so every button reacts right where you press it", F_S, (160, 150, 180), W // 2, 148, True)
+        if 'back' in s.act:                                     # (phone back button: skip for now)
+            s.go(s.tcal_after, 0)
+
     def tedit_button(s, lab):
         L = s.settings['touch']
         if lab in "-+" and s.tedit_sel:
@@ -1579,6 +1627,10 @@ class Game:
         if TOUCH:
             kinds = {pg.FINGERDOWN: 'down', pg.FINGERMOTION: 'move', pg.FINGERUP: 'up'}
             if ev.type in kinds:
+                if s.state == 'tcal':
+                    if ev.type == pg.FINGERDOWN:
+                        s.tcal_tap(ev.x, ev.y)
+                    return
                 if ANDROID and ev.type == pg.FINGERDOWN:
                     s.fnorm = (ev.x, ev.y)
                     s.touch_calibrate()
@@ -1592,7 +1644,9 @@ class Game:
                     mk = {pg.MOUSEBUTTONDOWN: 'down', pg.MOUSEBUTTONUP: 'up'}.get(ev.type)
                     if ev.type == pg.MOUSEMOTION and ev.buttons[0]:
                         mk = 'move'
-                    if mk:
+                    if mk == 'down' and s.state == 'tcal':
+                        s.tcal_tap(ev.pos[0] / W, ev.pos[1] / H)
+                    elif mk:
                         s.touch_event(mk, 'mouse', *ev.pos)
                 return                                              # (phones also send fake mouse events: ignored)
         if ANDROID and ev.type in JOY_EVENTS:                       # phones: touch only, no gamepad / sensor input
@@ -3791,13 +3845,13 @@ class Game:
     SETTING_ROWS = [('SOUND', 'MASTER VOLUME', 'master', 'slider'), ('', 'MUSIC', 'music', 'slider'),
                     ('', 'EFFECTS', 'sfx', 'slider'), ('VIDEO', 'GRAPHICS', 'gfx', 'gfx'),
                     ('', 'SHOW FPS', 'fps', 'toggle')] + ([] if ANDROID else [('', 'FULLSCREEN', 'fullscreen', 'toggle')]) + \
-                   [('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain'),
-                    ('', 'CRT FILTER', 'crt', 'toggle')] + \
+                   [('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain')] + \
+                   ([] if ANDROID else [('', 'CRT FILTER', 'crt', 'toggle')]) + \
                    ([('INPUT', 'JOYSTICK', 'float_stick', 'stick'), ('', 'BUTTON OPACITY', 'touch_alpha', 'slider'),
-                     ('', 'BUTTON LAYOUT', None, 'touch')] if ANDROID else          # phones: no keyboard / pad menus
+                     ('', 'BUTTON LAYOUT', None, 'touch'), ('', 'CALIBRATE TOUCH', None, 'tcal')] if ANDROID else          # phones: no keyboard / pad menus
                     [('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'), ('', 'CONTROLS', None, 'open')] +
                     ([('', 'JOYSTICK', 'float_stick', 'stick'), ('', 'BUTTON OPACITY', 'touch_alpha', 'slider'),
-                      ('', 'TOUCH LAYOUT', None, 'touch')] if TOUCH else [])) + \
+                      ('', 'TOUCH LAYOUT', None, 'touch'), ('', 'CALIBRATE TOUCH', None, 'tcal')] if TOUCH else [])) + \
                    [('', 'BACK', None, 'back')]
 
     def row_text(s, txt, selected, x, y):
@@ -3819,6 +3873,9 @@ class Game:
             st[key] = (st[key] + (delta or 1)) % len(GFX_LEVELS)
         elif kind == 'open':
             s.wipe_to(lambda: s.go('controls', 0))
+            return
+        elif kind == 'tcal':
+            s.wipe_to(lambda: s.start_tcal('settings'))
             return
         elif kind == 'touch':                                   # move / resize the on-screen buttons
             s.tedit_sel = None
@@ -3898,7 +3955,7 @@ class Game:
                 if on:
                     scr.blit(F_PS.render("<", False, INK), (tx - 16, y - 1))
                     scr.blit(F_PS.render(">", False, INK), (tx + tw + 4, y - 1))
-            elif kind in ('open', 'touch'):
+            elif kind in ('open', 'touch', 'tcal'):
                 scr.blit(F_PS.render(">>", False, INK if on else WHITE), (vx + 100, y - 1))
         pg.draw.polygon(scr, INK, [(0, H - 14), (W, H - 18), (W, H), (0, H)])
         text("tap a setting, tap again to change it   -   tap a bar to set it" if TOUCH else
