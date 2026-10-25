@@ -49,8 +49,12 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          set -o pipefail
-          yes | buildozer -v android debug 2>&1 | tee build.log
+          set +e
+          # "yes" answers the SDK licence prompts; only buildozer's own exit code counts (yes is cut off when it ends)
+          yes | buildozer -v android debug > build.log 2>&1
+          code=${PIPESTATUS[1]}
+          tail -n 60 build.log
+          exit $code
 
       - uses: actions/upload-artifact@v4
         with:
