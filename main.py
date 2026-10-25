@@ -1327,7 +1327,7 @@ class Game:
                     h['left'] |= dx < -sr * .25
                     h['right'] |= dx > sr * .25
                     h['up'] |= dy < -sr * .55 and abs(dy) > abs(dx) * .7
-                    h['down'] |= dy > sr * .55 and abs(dy) > abs(dx) * .7
+                    h['down'] |= dy > sr * .65 and dy > abs(dx) * 1.2     # strict: a drifting thumb isn't "down"
                 elif f[2] in ('jump', 'crouch'):
                     h[f[2]] = True
         return h
@@ -2143,8 +2143,8 @@ class Game:
                         p.face = d
             if 'jump' in A and p.dash <= 0 and p.landT <= 0:
                 if p.g:
-                    if down and not p.plat.ground:
-                        p.y += 3                                       # down + jump on a rooftop: drop through
+                    if down and not d and not p.plat.ground:
+                        p.y += 3                                       # down (only) + jump on a rooftop: drop through
                     else:
                         p.vy, p.crouch, p.slide = -JUMP_V, False, 0
                         sfx('jump')
