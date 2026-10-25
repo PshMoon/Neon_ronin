@@ -22,7 +22,7 @@ SETTINGS_FILE = os.path.join(SAVE_DIR, 'settings.json')
 ASSETS = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), 'assets')
 DEFAULT_SETTINGS = {'master': .8, 'music': .6, 'sfx': .8, 'fullscreen': False, 'shake': True,
                     'rain': 0 if ANDROID else 1, 'crt': not ANDROID, 'rumble': True,
-                    'gfx': 0 if ANDROID else 2, 'fps': False}       # gfx: graphics quality 0 LOW .. 2 HIGH
+                    'gfx': 0 if ANDROID else 2, 'fps': False, 'float_stick': True}       # gfx: graphics quality 0 LOW .. 2 HIGH
 RAIN_LEVELS = (("LIGHT", 35), ("MEDIUM", 70), ("HEAVY", 120))
 GFX_LEVELS = ("LOW", "MEDIUM", "HIGH")
 # on-screen controls: action -> [x, y, radius] in game pixels (480x270). The player can move/resize them in settings.
@@ -32,6 +32,8 @@ DEFAULT_TOUCH = {'stick': [64, 206, 36], 'atk': [394, 222, 22], 'jump': [444, 18
 TOUCH_LABELS = {'atk': "SLASH", 'jump': "JUMP", 'dash': "DASH", 'parry': "PARRY", 'crouch': "SLIDE",
                 'super': "SUPER", 'use': "USE", 'pause': "II", 'stick': ""}
 
+if ANDROID:                                          # phones report the accelerometer as a joystick: tilting
+    os.environ['SDL_ACCELEROMETER_AS_JOYSTICK'] = '0'  # the phone would press buttons. Turn that off.
 pg.mixer.pre_init(44100, -16, 2, 512)
 pg.init()
 if not hasattr(pg.transform, 'scale_by'):           # older pygame builds (e.g. on Android) lack scale_by
@@ -44,8 +46,8 @@ clock = pg.time.Clock()
 def load_font(sysnames, size, bold=False, file=None):
     """Bundled font if present (Android has no Windows fonts), else the system font."""
     path = os.path.join(ASSETS, 'fonts', file) if file else None
-    if path and os.path.exists(path):
-        return pg.font.Font(path, size)
+    if path and os.path.exists(path):                   # (bundled fonts run large: a little smaller on phones)
+        return pg.font.Font(path, max(9, round(size * .88)))
     return pg.font.SysFont(sysnames, size, bold=bold)
 
 
@@ -79,6 +81,8 @@ MENU_KEYS = {pg.K_RETURN: ('ok',), pg.K_KP_ENTER: ('ok',), pg.K_SPACE: ('ok',), 
              pg.K_AC_BACK: ('back', 'pause')}                   # Android back button
 MENU_HINT = ("W/S select   ENTER confirm   F11 fullscreen", "D-PAD select   A confirm   B back")
 RED, WHITE, INK = (215, 20, 40), (255, 255, 255), (10, 8, 12)
+JOY_EVENTS = {pg.JOYDEVICEADDED, pg.JOYDEVICEREMOVED, pg.JOYBUTTONDOWN, pg.JOYBUTTONUP, pg.JOYHATMOTION,
+              pg.JOYAXISMOTION, pg.JOYBALLMOTION}
 
 # "{NAME}" is replaced with the player's chosen name
 DIALOG = [
@@ -1209,7 +1213,7 @@ class Game:
         s.t, s.dt, s.fade, s.selT = 0.0, 1 / 60, 1.0, 0.0
         s.wipe, s.wipe_fn = 0.0, None
         s.train, s.trainT, s.blimp, s.lightT, s.lightning = None, 4.0, 0.0, R(8, 16), 0.0
-        s.click, s.moved = False, False
+        s.click, s.moved, s.ptr = False, False, (-99, -99)    # ptr: where the mouse / last tap is
         if pg.mixer.get_init():
             pg.mixer.set_num_channels(32)
             pg.mixer.set_reserved(2)                         # channels 0+1: the two music layers
@@ -1345,44 +1349,42 @@ class Game:
         if s.state == 'touchedit':
             s.tedit_event(kind, fid, x, y)
             return
+        s.last_input = 'touch'
+        if s.state != 'play':                                     # menus: a tap is a click right where the finger is
+            s.ptr, s.moved = (x, y), True
+            s.click |= kind == 'down'
+            return
         if kind == 'up':
             s.fingers.pop(fid, None)
             return
         f = s.fingers.get(fid)
-        if kind == 'move':
-            if f is None:
-                return
-            f[0], f[1] = x, y
-            if f[2] == 'stick':                                   # the stick base trails the thumb: reversing is instant
-                sr = L['stick'][2]
-                d = math.hypot(x - f[3], y - f[4])
-                if d > sr:
-                    f[3], f[4] = x - (x - f[3]) * sr / d, y - (y - f[4]) * sr / d
-            else:                                                 # slide a thumb from one button onto another
-                a = s.touch_button(x, y, 1.25)
-                if a and a != f[2]:
-                    f[2] = a
-                    s.act.add(a)
-                    s.atk_rep = .32
+        if kind == 'move':                                        # a finger keeps the control it first pressed
+            if f is not None:
+                f[0], f[1] = x, y
+                if f[2] == 'stick' and s.settings['float_stick']:  # the base trails the thumb: reversing is instant
+                    sr = L['stick'][2]
+                    d = math.hypot(x - f[3], y - f[4])
+                    if d > sr:
+                        f[3], f[4] = x - (x - f[3]) * sr / d, y - (y - f[4]) * sr / d
             return
-        if s.state != 'play':                                     # menus use the tap as a normal click
-            return
-        s.last_input = 'touch'
-        a = s.touch_button(x, y, 1.15)                            # right on a button: always that button
-        if a is None and x < W * .45 and not any(g[2] == 'stick' for g in s.fingers.values()):
-            sx, sy, sr = L['stick']                               # floating stick: it appears under the thumb
-            s.fingers[fid] = [x, y, 'stick', max(sr, min(W * .45, x)), max(sr + 20, min(H - sr * .6, y))]
-            return
-        a = a or s.touch_button(x, y, 1.7)                        # otherwise the nearest button, generously
+        a = s.touch_button(x, y)
         if a:
             s.fingers[fid] = [x, y, a]
             s.act.add(a)
             s.atk_rep = .32
+        elif not any(g[2] == 'stick' for g in s.fingers.values()):
+            sx, sy, sr = L['stick']
+            if s.settings['float_stick']:
+                if x < W * .5:                                    # floating: left half, the stick appears under the thumb
+                    s.fingers[fid] = [x, y, 'stick', max(sr, x), max(sr + 20, min(H - sr * .6, y))]
+            elif math.hypot(x - sx, y - sy) < sr * 1.6:          # fixed: only around its own spot
+                s.fingers[fid] = [x, y, 'stick', sx, sy]
 
-    def touch_button(s, x, y, reach):
-        """The button nearest to (x, y), if within reach * its radius."""
-        best = min((math.hypot(x - bx, y - by) / br, a) for a, (bx, by, br) in s.settings['touch'].items() if a != 'stick')
-        return best[1] if best[0] < reach else None
+    def touch_button(s, x, y):
+        """The button under the finger (a little larger than drawn), or None."""
+        hits = [(math.hypot(x - bx, y - by) / br, a) for a, (bx, by, br) in s.settings['touch'].items()
+                if a != 'stick' and math.hypot(x - bx, y - by) < br * 1.3]
+        return min(hits)[1] if hits else None
 
     def touch_tick(s, dt):
         """Holding ATTACK keeps swinging."""
@@ -1425,7 +1427,7 @@ class Game:
                 sx, sy = f[3], f[4]
                 kx, ky = f[0], f[1]
         sr = int(sr)
-        img = s.touch_sprite('btn', sr, '', 'off' if kx is not None else 'dim')
+        img = s.touch_sprite('btn', sr, '', 'off' if kx is not None or not s.settings['float_stick'] else 'dim')
         scr.blit(img, (sx - sr - 1, sy - sr - 1))
         if kx is not None:
             d = math.hypot(kx - sx, ky - sy) or 1
@@ -1519,15 +1521,16 @@ class Game:
             if ev.type in kinds:
                 s.touch_event(kinds[ev.type], ev.finger_id, *s.to_logical(ev.x, ev.y))
                 return
-            if not ANDROID:                                         # PC test mode: the mouse plays one finger
-                mk = {pg.MOUSEBUTTONDOWN: 'down', pg.MOUSEBUTTONUP: 'up'}.get(ev.type)
-                if ev.type == pg.MOUSEMOTION and ev.buttons[0]:
-                    mk = 'move'
-                if mk and getattr(ev, 'button', 1) == 1:
-                    s.touch_event(mk, 'mouse', *ev.pos)
-            if ev.type == pg.MOUSEBUTTONDOWN:                       # taps work as clicks in menus, never as attacks
-                s.click = ev.button == 1
-                return
+            if ev.type in (pg.MOUSEBUTTONDOWN, pg.MOUSEBUTTONUP, pg.MOUSEMOTION, pg.MOUSEWHEEL):
+                if not ANDROID and getattr(ev, 'button', 1) == 1:   # PC test mode: the mouse plays one finger
+                    mk = {pg.MOUSEBUTTONDOWN: 'down', pg.MOUSEBUTTONUP: 'up'}.get(ev.type)
+                    if ev.type == pg.MOUSEMOTION and ev.buttons[0]:
+                        mk = 'move'
+                    if mk:
+                        s.touch_event(mk, 'mouse', *ev.pos)
+                return                                              # (phones also send fake mouse events: ignored)
+        if ANDROID and ev.type in JOY_EVENTS:                       # phones: touch only, no gamepad / sensor input
+            return
         if ev.type == pg.KEYDOWN:
             s.last_input = 'kb'
             if s.capture:                                        # waiting for a new key binding
@@ -1557,6 +1560,7 @@ class Game:
                 if (ch.isalnum() or ch in " -_.") and len(s.name_buf) < 12:
                     s.name_buf += ch
         elif ev.type == pg.MOUSEBUTTONDOWN:
+            s.ptr = ev.pos
             if ev.button == 1:
                 s.click = True
                 s.act.add('atk')
@@ -1564,7 +1568,7 @@ class Game:
                 s.act.add('parry')
             s.last_input = 'kb'
         elif ev.type == pg.MOUSEMOTION:
-            s.moved = True
+            s.moved, s.ptr = True, ev.pos
         elif ev.type == pg.JOYDEVICEADDED:
             j = pg.joystick.Joystick(ev.device_index)
             s.joys[j.get_instance_id()] = j
@@ -3549,7 +3553,7 @@ class Game:
         n = len(items)
         s.sel %= n
         s.nav(n)
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         el = s.t - s.state_t
         fire = -1
         for i, (lab, _) in enumerate(items):
@@ -3558,7 +3562,7 @@ class Game:
             on = i == s.sel
             w, h = font.size(lab)
             r = pg.Rect(x - 8, y - 2, w + 16, h + 2)
-            if r.collidepoint(mx, my):
+            if r.inflate(16, 10 if TOUCH else 0).collidepoint(mx, my):
                 if s.moved and not on:
                     s.sel, s.selT = i, s.t
                     sfx('sel')
@@ -3708,14 +3712,16 @@ class Game:
         s.p_items([("START", s.new_run), ("STATS", lambda: s.go('stats', 0)),
                    ("SETTINGS", lambda: s.go('settings', 0)), ("QUIT", s.quit)], 36, 124, dx=14, dy=31)
         pg.draw.polygon(scr, INK, [(0, H - 14), (W, H - 18), (W, H), (0, H)])
-        text(MENU_HINT[s.last_input == 'pad'], F_S, (220, 210, 240), W // 2, H - 13, True)
+        text("tap to choose" if TOUCH else MENU_HINT[s.last_input == 'pad'], F_S, (220, 210, 240), W // 2, H - 13, True)
 
     SETTING_ROWS = [('SOUND', 'MASTER VOLUME', 'master', 'slider'), ('', 'MUSIC', 'music', 'slider'),
                     ('', 'EFFECTS', 'sfx', 'slider'), ('VIDEO', 'GRAPHICS', 'gfx', 'gfx'),
                     ('', 'SHOW FPS', 'fps', 'toggle')] + ([] if ANDROID else [('', 'FULLSCREEN', 'fullscreen', 'toggle')]) + \
                    [('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain'),
-                    ('', 'CRT FILTER', 'crt', 'toggle'), ('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'),
-                    ('', 'CONTROLS', None, 'open')] + ([('', 'TOUCH LAYOUT', None, 'touch')] if TOUCH else []) + \
+                    ('', 'CRT FILTER', 'crt', 'toggle')] + \
+                   ([('INPUT', 'JOYSTICK', 'float_stick', 'stick'), ('', 'TOUCH CONTROLS', None, 'touch')] if ANDROID else          # phones: no keyboard / pad menus
+                    [('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'), ('', 'CONTROLS', None, 'open')] +
+                    ([('', 'JOYSTICK', 'float_stick', 'stick'), ('', 'TOUCH LAYOUT', None, 'touch')] if TOUCH else [])) + \
                    [('', 'BACK', None, 'back')]
 
     def row_text(s, txt, selected, x, y):
@@ -3729,7 +3735,7 @@ class Game:
         st = s.settings
         if kind == 'slider':
             st[key] = round(max(0, min(1, (mx if mx is not None else st[key] + delta * .1))), 2)
-        elif kind == 'toggle':
+        elif kind in ('toggle', 'stick'):
             st[key] = not st[key]
         elif kind == 'rain':
             st[key] = (st[key] + (delta or 1)) % len(RAIN_LEVELS)
@@ -3759,13 +3765,13 @@ class Game:
         s.nav(len(rows))
         row = rows[s.sel]
         if 'left' in s.act or 'right' in s.act:
-            if row[3] in ('slider', 'toggle', 'rain', 'gfx'):
+            if row[3] in ('slider', 'toggle', 'rain', 'gfx', 'stick'):
                 s.change_setting(row, 1 if 'right' in s.act else -1)
         if 'ok' in s.act:
             s.change_setting(row, 1)
         if 'back' in s.act:
             s.wipe_to(lambda: s.go('menu', 0))
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         for i, (sec, lab, key, kind) in enumerate(rows):
             a = ease((el - .05 - i * .04) * 4)
             x, y, w = 120 + int((1 - a) * 380) - i * 2, 50 + i * min(19, 196 // len(rows)), 330
@@ -3801,13 +3807,14 @@ class Game:
                     scr.fill((RED if on else (0, 200, 230)) if filled else ((60, 50, 70) if not on else (190, 180, 200)),
                              (vx + b * 12, y + 4, 10, 9))
                 label(f"{int(v * 100)}%", on, vx + 124, y + 3)
-            elif kind in ('toggle', 'rain', 'gfx'):
+            elif kind in ('toggle', 'rain', 'gfx', 'stick'):
                 val = (RAIN_LEVELS[s.settings[key]][0] if kind == 'rain' else GFX_LEVELS[s.settings[key]] if kind == 'gfx'
+                       else ("FLOATING" if s.settings[key] else "FIXED") if kind == 'stick'
                        else ("ON" if s.settings[key] else "OFF"))
                 img = F_PS.render(val, False, WHITE)
                 tw = img.get_width() + 14
                 tx = vx + 60 - tw // 2
-                pg.draw.polygon(scr, RED if (kind in ('rain', 'gfx') or s.settings[key]) else (70, 60, 80),
+                pg.draw.polygon(scr, RED if (kind in ('rain', 'gfx', 'stick') or s.settings[key]) else (70, 60, 80),
                                 [(tx, y), (tx + tw, y - 1), (tx + tw - 4, y + 16), (tx - 4, y + 17)])
                 scr.blit(img, (tx + 7, y - 1))
                 if on:
@@ -3816,7 +3823,8 @@ class Game:
             elif kind in ('open', 'touch'):
                 scr.blit(F_PS.render(">>", False, INK if on else WHITE), (vx + 100, y - 1))
         pg.draw.polygon(scr, INK, [(0, H - 14), (W, H - 18), (W, H), (0, H)])
-        text("UP/DOWN select   LEFT/RIGHT change   ENTER / A confirm   ESC / B back", F_S, (220, 210, 240), W // 2, H - 13, True)
+        text("tap a setting to change it   -   tap a volume bar to set it" if TOUCH else
+             "UP/DOWN select   LEFT/RIGHT change   ENTER / A confirm   ESC / B back", F_S, (220, 210, 240), W // 2, H - 13, True)
 
     def st_controls(s, dt):
         """Rebind every action, for keyboard and for the Xbox pad."""
@@ -3837,7 +3845,7 @@ class Game:
         for c, (title, x) in enumerate((("KEYBOARD / MOUSE", 186), ("XBOX CONTROLLER", 330))):
             pg.draw.polygon(scr, RED if c == s.col else INK, [(x - 4, 32), (x + 132, 30), (x + 128, 44), (x - 8, 46)])
             outlined(title, F_PS, WHITE, x + 2, 30, r=1)
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         fire = None
         for i, (a, label) in enumerate(rows):
             sl = ease((el - .05 - i * .03) * 4)
@@ -3949,7 +3957,7 @@ class Game:
         scr.set_clip(None)
         pg.draw.rect(scr, WHITE, frame, 3)
         plate = [(16 + cut, 204), (182 + cut, 200), (178 + cut, 228), (12 + cut, 232)]   # name plate
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         if s.typing or s.sel == 0:
             pg.draw.polygon(scr, RED, [(a + 4, b_ + 3) for a, b_ in plate])
         pg.draw.polygon(scr, INK, plate)
@@ -3990,7 +3998,8 @@ class Game:
                     s.finish_name(True)
                 elif 'back' in s.act:
                     s.finish_name(False)
-            text("type your name  -  ENTER save  -  ESC cancel" if s.last_input == 'kb' else
+            text("type your name, then press Enter" if TOUCH else
+                 "type your name  -  ENTER save  -  ESC cancel" if s.last_input == 'kb' else
                  "UP/DOWN letter  RIGHT add  LEFT delete  Y random  A save", F_S, (255, 230, 120), 98, 248, True)
             return
         s.nav(3)
@@ -4004,7 +4013,7 @@ class Game:
         elif (s.click and btns[1][1].collidepoint(mx, my)) or ('ok' in s.act and s.sel == 2) or 'back' in s.act:
             s.wipe_to(s.to_menu)
         if s.sel == 0:
-            text("ENTER / A: change name", F_S, (220, 210, 240), 98, 248, True)
+            text("tap the name to change it" if TOUCH else "ENTER / A: change name", F_S, (220, 210, 240), 98, 248, True)
 
     def st_skins(s, dt):
         s.persona_bg()
@@ -4024,7 +4033,7 @@ class Game:
         cw, gap = 130, 16
         scroll = max(0, min(s.sel * (cw + gap) - (cw + gap), n * (cw + gap) - gap - (W - 40)))
         x0 = max(20, W // 2 - (n * (cw + gap) - gap) // 2) - scroll
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         fire = 'ok' in s.act
         for i, sid in enumerate(ids):
             name, price, _ = SKINS[sid]
@@ -4080,7 +4089,8 @@ class Game:
                 sfx('deny')
             save_stats(st)
         pg.draw.polygon(scr, INK, [(0, H - 14), (W, H - 18), (W, H), (0, H)])
-        text("LEFT/RIGHT choose     ENTER / A buy or equip     ESC / B back      more skins soon", F_S,
+        text("tap a skin to buy or equip it      more skins soon" if TOUCH else
+             "LEFT/RIGHT choose     ENTER / A buy or equip     ESC / B back      more skins soon", F_S,
              (220, 210, 240), W // 2, H - 13, True)
         if 'back' in s.act:
             s.wipe_to(lambda: s.go('stats', 0))
@@ -4245,7 +4255,7 @@ class Game:
             for jx in range(counter.x + 40 + (i % 2) * 55, counter.right, 110):
                 pg.draw.line(scr, (86, 50, 26), (jx, ly - 10), (jx, ly))
         pg.draw.rect(scr, (60, 34, 18), counter, 2)
-        mx, my = pg.mouse.get_pos()
+        mx, my = s.ptr
         fire = 'ok' in s.act
         for i, b in enumerate(cards):
             title, desc, col = (BUFFS[b] if b in BUFFS else KEY_BUFF[1:])
@@ -4272,7 +4282,8 @@ class Game:
             if s.click and r.collidepoint(mx, my):
                 s.sel, fire = i, True
         kind = 'pad' if s.last_input == 'pad' else 'kb'
-        text("LEFT/RIGHT choose   " + ("A take   B leave" if kind == 'pad' else "ENTER / CLICK take   ESC leave"),
+        text("tap a card to take it" if TOUCH else
+             "LEFT/RIGHT choose   " + ("A take   B leave" if kind == 'pad' else "ENTER / CLICK take   ESC leave"),
              F_S, (220, 210, 240), W // 2, H - 11, True)
         if fire:
             s.apply_buff(cards[s.sel])
