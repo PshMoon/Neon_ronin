@@ -6,6 +6,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write          # lets the build publish the APK as a release (a plain download link)
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -50,3 +53,10 @@ jobs:
         with:
           name: NeonRonin-apk
           path: bin/*.apk
+
+      - name: Publish the APK as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Neon Ronin (build ${{ github.run_number }})
+          files: bin/*.apk
