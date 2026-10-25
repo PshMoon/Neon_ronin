@@ -242,9 +242,10 @@ def load_settings():
 
 
 # ---------------------------------------------------------------- sound
-def synth(d, vol, *layers):
+def synth(d, vol, *layers, drive=1.0):
     """Tiny layered synth. Each layer: (wave, f0, f1, gain, decay, lowpass, start).
-    wave: sin/sq/saw/noise, f0->f1 exponential pitch sweep, lowpass 0..1 (lower = darker)."""
+    wave: sin/sq/saw/noise, f0->f1 exponential pitch sweep, lowpass 0..1 (lower = darker).
+    drive: overdrive into the tanh clipper (higher = dirtier, more brutal)."""
     fr, _, ch = pg.mixer.get_init()
     n = int(fr * d)
     out = [0.0] * n
@@ -266,7 +267,7 @@ def synth(d, vol, *layers):
             out[i] += lpv * min(1, t * 500) * math.exp(-t * decay) * gain
     a = array('h')
     for v in out:
-        a.extend([int(math.tanh(v) * vol * 32767)] * ch)
+        a.extend([int(math.tanh(v * drive) * vol * 32767)] * ch)
     return pg.mixer.Sound(buffer=a.tobytes())
 
 
@@ -276,17 +277,23 @@ def L_(wave_, f0, f1=None, gain=1.0, decay=8.0, lpf=1.0, start=0.0):
 
 try:
     SFX = {
-        'slash': synth(.15, .3, L_('noise', 1, decay=18, lpf=.35), L_('sin', 1800, 500, .25, 25)),
-        'eslash': synth(.17, .25, L_('noise', 1, decay=14, lpf=.2), L_('sin', 900, 280, .25, 18)),
-        'hit': synth(.18, .5, L_('sin', 170, 45, 1.2, 14), L_('noise', 1, gain=.7, decay=120, lpf=.6)),
-        'kill': synth(.38, .5, L_('sin', 130, 32, 1.2, 7), L_('noise', 1, gain=.8, decay=10, lpf=.25),
-                      L_('sq', 90, 40, .3, 12, .1)),
+        # combat: overdriven layers with a sub thump and a crunchy transient
+        'slash': synth(.18, .32, L_('noise', 1, decay=15, lpf=.45), L_('sin', 1500, 300, .3, 22),
+                       L_('saw', 170, 60, .35, 20, .15), drive=2.2),
+        'eslash': synth(.2, .28, L_('noise', 1, decay=12, lpf=.25), L_('sin', 800, 220, .3, 16),
+                        L_('saw', 120, 50, .3, 16, .12), drive=2.2),
+        'hit': synth(.24, .5, L_('sin', 150, 36, 1.6, 12), L_('noise', 1, gain=1, decay=55, lpf=.5),
+                     L_('sq', 80, 32, .5, 14, .15), L_('noise', 1, gain=.6, decay=220, lpf=.95), drive=3.5),
+        'kill': synth(.5, .52, L_('sin', 120, 24, 1.7, 6), L_('noise', 1, gain=.9, decay=8, lpf=.3),
+                      L_('sq', 70, 28, .6, 8, .12), L_('noise', 1, gain=.7, decay=160, lpf=.95),
+                      L_('noise', 1, gain=.5, decay=30, lpf=.6, start=.04), drive=3.5),
         'coin': synth(.22, .16, L_('sq', 1319, gain=.5, decay=18, lpf=.5), L_('sq', 1976, gain=.5, decay=14, lpf=.5, start=.05)),
         'myth': synth(.5, .2, *[L_('sin', f, decay=9, start=i * .05) for i, f in enumerate((1047, 1319, 1568, 2093))],
                       L_('sq', 4186, gain=.12, decay=6, lpf=.3, start=.15)),
-        'hurt': synth(.3, .35, L_('sq', 260, 90, 1, 8, .3), L_('noise', 1, gain=.6, decay=15, lpf=.4)),
+        'hurt': synth(.34, .38, L_('sq', 220, 70, 1, 8, .25), L_('noise', 1, gain=.8, decay=14, lpf=.4),
+                      L_('sin', 90, 38, 1, 10), drive=3),
         'jump': synth(.12, .2, L_('sin', 220, 520, .8, 18), L_('noise', 1, gain=.3, decay=40, lpf=.15)),
-        'land': synth(.09, .2, L_('sin', 120, 60, 1, 30), L_('noise', 1, gain=.4, decay=50, lpf=.2)),
+        'land': synth(.11, .22, L_('sin', 110, 50, 1.2, 26), L_('noise', 1, gain=.5, decay=45, lpf=.2), drive=2),
         # footsteps per surface: wet street, stone roofs, metal platforms, wooden tiles
         'step_water': synth(.09, .09, L_('noise', 1, gain=.7, decay=35, lpf=.5), L_('sin', 900, 300, .15, 40)),
         'step_stone': synth(.05, .09, L_('noise', 1, gain=.6, decay=70, lpf=.3), L_('sin', 150, 90, .4, 50)),
@@ -298,7 +305,8 @@ try:
                        L_('sin', 2745, gain=.6, decay=9), L_('sin', 3910, gain=.4, decay=12), L_('sin', 420, gain=.5, decay=14)),
         'block': synth(.3, .25, L_('noise', 1, gain=.8, decay=40, lpf=.6), L_('sin', 980, decay=14), L_('sin', 1510, gain=.5, decay=16)),
         'charge': synth(.5, .2, L_('saw', 60, 240, .6, 1.5, .08), L_('sin', 300, 1200, .4, 2)),
-        'super': synth(.9, .55, L_('noise', 1, gain=1, decay=5, lpf=.35), L_('sin', 1600, 120, .5, 4), L_('sin', 90, 30, 1.2, 3.5)),
+        'super': synth(1.0, .55, L_('noise', 1, gain=1, decay=5, lpf=.35), L_('sin', 1600, 120, .5, 4),
+                       L_('sin', 90, 24, 1.5, 3.2), L_('saw', 60, 30, .5, 4, .1), drive=2.8),
         'unsheathe': synth(.35, .2, L_('noise', 1, gain=.5, decay=8, lpf=.6), L_('sin', 2400, 3600, .3, 6), L_('sin', 5200, gain=.15, decay=10)),
         'door': synth(.7, .4, L_('noise', 1, gain=.6, decay=5, lpf=.06), L_('sin', 70, 45, 1, 6), L_('noise', 1, gain=.8, decay=30, lpf=.3, start=.45)),
         'gate': synth(.8, .38, L_('saw', 120, 40, .5, 5, .2), L_('sq', 880, 220, .25, 6, .3), L_('noise', 1, gain=.7, decay=25, lpf=.4, start=.3)),
@@ -307,12 +315,13 @@ try:
         'deny': synth(.2, .2, L_('sq', 180, 140, .6, 10, .3)),
         'hood': synth(.35, .25, L_('noise', 1, gain=.9, decay=7, lpf=.18), L_('noise', 1, gain=.4, decay=12, lpf=.5, start=.08)),
         'glint': synth(.6, .16, L_('sin', 3520, decay=6), L_('sin', 5274, gain=.5, decay=8), L_('sin', 7040, gain=.25, decay=12)),
-        'dash': synth(.24, .26, L_('noise', 1, decay=9, lpf=.5), L_('sin', 900, 200, .3, 12)),
+        'dash': synth(.26, .27, L_('noise', 1, decay=9, lpf=.5), L_('sin', 900, 200, .3, 12), L_('sin', 80, 40, .6, 14), drive=2),
         'ping': synth(.35, .2, L_('sin', 2100, decay=12), L_('sin', 2900, gain=.6, decay=16), L_('sin', 4200, gain=.3, decay=25)),
         'throw': synth(.09, .2, L_('noise', 1, decay=30, lpf=.5), L_('sin', 1300, 1900, .3, 30)),
-        'slam': synth(.7, .55, L_('sin', 110, 28, 1.3, 4.5), L_('noise', 1, gain=.9, decay=6, lpf=.12),
-                      L_('noise', 1, gain=.5, decay=40, lpf=.7)),
-        'boom': synth(.5, .45, L_('noise', 1, decay=6, lpf=.18), L_('sin', 200, 40, 1, 8)),
+        'slam': synth(.8, .56, L_('sin', 100, 22, 1.7, 4), L_('noise', 1, gain=1, decay=6, lpf=.12),
+                      L_('noise', 1, gain=.7, decay=60, lpf=.8), L_('sq', 55, 25, .5, 5, .08), drive=3.5),
+        'boom': synth(.6, .48, L_('noise', 1, decay=5, lpf=.18), L_('sin', 180, 30, 1.4, 6),
+                      L_('noise', 1, gain=.6, decay=90, lpf=.9), drive=3.2),
         'pad': synth(.3, .22, L_('sin', 180, 900, 1, 6), L_('sq', 360, 1800, .25, 10, .2)),
         'crack': synth(.18, .25, L_('noise', 1, decay=25, lpf=.8), L_('noise', 1, decay=25, lpf=.3, start=.05)),
         'wipe': synth(.3, .2, L_('noise', 1, gain=.7, decay=3, lpf=.3), L_('sin', 300, 2400, .3, 4)),
@@ -1219,6 +1228,8 @@ class Game:
         s.train, s.trainT, s.blimp, s.lightT, s.lightning = None, 4.0, 0.0, R(8, 16), 0.0
         s.click, s.moved, s.ptr = False, False, (-99, -99)    # ptr: where the mouse / last tap is
         s.armed = None                                         # touch: the item a first tap highlighted
+        s.touch_map = 'direct' if pg.get_sdl_version() >= (2, 0, 18) else 'window'
+        s.fnorm = s.mpos = None                                # this frame's finger-down / fake click (calibration)
         if pg.mixer.get_init():
             pg.mixer.set_num_channels(32)
             pg.mixer.set_reserved(2)                         # channels 0+1: the two music layers
@@ -1343,12 +1354,27 @@ class Game:
         return h
 
     # ---------- touch controls (Android, or the PC with --touch)
-    @staticmethod
-    def to_logical(nx, ny):
-        """Finger position (0..1 of the window) -> game pixels, accounting for the letterbox bars."""
+    def to_logical(s, nx, ny):
+        """Finger position -> game pixels. Newer SDL already gives fingers as 0..1 of the game screen
+        ('direct'); older SDL gives 0..1 of the whole window, letterbox bars included ('window')."""
+        if s.touch_map == 'direct':
+            return nx * W, ny * H
         ww, wh = pg.display.get_window_size()
         k = min(ww / W, wh / H)
         return (nx * ww - (ww - W * k) / 2) / k, (ny * wh - (wh - H * k) / 2) / k
+
+    def touch_calibrate(s):
+        """Phones also send a fake mouse click for a tap, already mapped to the game screen by SDL.
+        When a finger-down and that click arrive in the same frame, keep the finger mapping that agrees with it."""
+        if s.fnorm is None or s.mpos is None:
+            return
+        err = {}
+        for mode in ('direct', 'window'):
+            s.touch_map = mode
+            x, y = s.to_logical(*s.fnorm)
+            err[mode] = math.hypot(x - s.mpos[0], y - s.mpos[1])
+        s.touch_map = min(err, key=err.get)
+        s.fnorm = s.mpos = None
 
     def touch_event(s, kind, fid, x, y):
         L = s.settings['touch']
@@ -1553,9 +1579,15 @@ class Game:
         if TOUCH:
             kinds = {pg.FINGERDOWN: 'down', pg.FINGERMOTION: 'move', pg.FINGERUP: 'up'}
             if ev.type in kinds:
+                if ANDROID and ev.type == pg.FINGERDOWN:
+                    s.fnorm = (ev.x, ev.y)
+                    s.touch_calibrate()
                 s.touch_event(kinds[ev.type], ev.finger_id, *s.to_logical(ev.x, ev.y))
                 return
             if ev.type in (pg.MOUSEBUTTONDOWN, pg.MOUSEBUTTONUP, pg.MOUSEMOTION, pg.MOUSEWHEEL):
+                if ANDROID and ev.type == pg.MOUSEBUTTONDOWN:
+                    s.mpos = ev.pos
+                    s.touch_calibrate()
                 if not ANDROID and getattr(ev, 'button', 1) == 1:   # PC test mode: the mouse plays one finger
                     mk = {pg.MOUSEBUTTONDOWN: 'down', pg.MOUSEBUTTONUP: 'up'}.get(ev.type)
                     if ev.type == pg.MOUSEMOTION and ev.buttons[0]:
@@ -4446,6 +4478,7 @@ class Game:
             s.t += dt
             s.dt = dt
             s.act, s.click, s.moved = set(), False, False
+            s.fnorm = s.mpos = None
             for ev in pg.event.get():
                 if ev.type == pg.QUIT:
                     s.quit()
