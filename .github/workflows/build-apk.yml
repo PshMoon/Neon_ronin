@@ -4,6 +4,7 @@ name: Build APK
 
 on:
   push:
+    branches: [main]       # (only the main version: uploading a tag builds nothing)
   workflow_dispatch:
 
 permissions:

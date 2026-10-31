@@ -495,6 +495,11 @@ rep("""        ok = os.path.exists(os.path.join(ASSETS, 'level.mp3'))""",
 # the "[USE] OPEN KIOSK" tags: translate the label too
 rep('        txt = f"[{key}] {label}"', '        txt = f"[{key}] {tr(label)}"')
 
+# the version line on the main menu says which game this is: the agents version, Android, built on <date>
+import datetime
+rep('VERSION = "v3: 10 districts, bosses, Russian"',
+    f'VERSION = "agents version - Android {datetime.date.today():%Y-%m-%d}"')
+
 # ================================================================ Russian text for the new lines
 rep("""    "SPIRITS": "ОДЕРЖИМЫЕ",""", """    "TOUCH LAYOUT": "РАСКЛАДКА КНОПОК", "CALIBRATE TOUCH": "КАЛИБРОВКА ЭКРАНА", "FLOATING STICK": "ПЛАВАЮЩИЙ СТИК",
     "BUTTON OPACITY": "ПРОЗРАЧНОСТЬ КНОПОК", "TOUCH CALIBRATION": "КАЛИБРОВКА ЭКРАНА", "MOVE": "ХОД",

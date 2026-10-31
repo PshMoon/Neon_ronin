@@ -141,7 +141,7 @@ MENU_KEYS = {pg.K_AC_BACK: ('back', 'pause'), pg.K_RETURN: ('ok',), pg.K_KP_ENTE
              pg.K_BACKSPACE: ('back',), pg.K_UP: ('up',), pg.K_DOWN: ('down',), pg.K_LEFT: ('left',), pg.K_RIGHT: ('right',)}
 MENU_HINT = ("W/S select   ENTER confirm   F11 fullscreen", "D-PAD select   A confirm   B back")
 RED, WHITE, INK = (215, 20, 40), (255, 255, 255), (10, 8, 12)
-VERSION = "v3: 10 districts, bosses, Russian"
+VERSION = "agents version - Android 2026-10-31"
 
 # "{NAME}" is replaced with the player's chosen name
 DIALOG = [
