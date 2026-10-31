@@ -23,15 +23,15 @@ ASSETS = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(_
 DEFAULT_SETTINGS = {'master': .8, 'music': .6, 'sfx': .8, 'fullscreen': False, 'shake': True,
                     'rain': 1, 'crt': True, 'rumble': True, 'lang': 'ru', 'god': False,
                     'admin': False, 'a_dmg': 0, 'a_fly': False, 'a_noclip': False, 'a_speed': 0, 'a_jump': 0,
-                    'a_kills': False, 'a_money': False, 'diff': 2,
+                    'a_kills': False, 'a_money': False, 'diff': 2, 'fps_lock': 2, 'gfx': 2, 'show_fps': False,
                     'float_stick': True, 'touch_alpha': .8, 'tcal': None}   # tcal: touch calibration [ax, bx, ay, by]
 if ANDROID:                                          # phones: lighter rain, no CRT layer
     DEFAULT_SETTINGS.update(rain=0, crt=False)
 # on-screen controls: action -> [x, y, radius] in game pixels (480x270). The player can move/resize them in settings.
-DEFAULT_TOUCH = {'stick': [70, 200, 38], 'atk': [400, 218, 26], 'jump': [452, 170, 22], 'dash': [342, 240, 18],
-                 'parry': [396, 158, 17], 'skill': [454, 238, 15], 'super': [340, 184, 16], 'use': [288, 238, 14],
-                 'pause': [460, 60, 12]}
-TOUCH_V = 3                                          # bump when DEFAULT_TOUCH changes: old saved layouts are reset
+DEFAULT_TOUCH = {'stick': [70, 200, 38], 'atk': [404, 216, 26], 'jump': [456, 168, 22], 'dash': [350, 236, 22],
+                 'parry': [400, 156, 22], 'skill': [456, 236, 19], 'super': [346, 180, 19], 'use': [292, 240, 18],
+                 'pause': [458, 62, 17]}
+TOUCH_V = 5                                          # bump when DEFAULT_TOUCH changes: old saved layouts are reset
 TOUCH_LABELS = {'atk': "SLASH", 'jump': "JUMP", 'dash': "DASH", 'parry': "PARRY", 'skill': "SKILL",
                 'super': "SUPER", 'use': "USE", 'pause': "II", 'stick': ""}
 TOUCH_RU = {"SLASH": "УДАР", "JUMP": "ПРЫЖОК", "DASH": "РЫВОК", "PARRY": "БЛОК", "SKILL": "НАВЫК",
@@ -49,6 +49,9 @@ ADMIN_ROWS = [('', 'TELEPORT', 'teleport', 'action'), ('', 'DAMAGE', 'a_dmg', 'c
               ('', 'REMOVE ALL MAPS', 'maps_clear', 'action')]
 LANG = 'ru'                                # 'en' or 'ru', set from the settings (SETTINGS -> LANGUAGE)
 RAIN_LEVELS = (("LIGHT", 35), ("MEDIUM", 70), ("HEAVY", 120))
+FPS_LOCKS = (("VSYNC", 0), ("30", 30), ("60", 60), ("90", 90), ("120", 120), ("UNLIMITED", 0))   # (name, clock.tick cap)
+GFX_LEVELS = (("LOW", .45), ("MEDIUM", .7), ("HIGH", 1.0))         # (name, share of the effect particles kept)
+GFX_RU = {"LOW": "НИЗКАЯ", "MEDIUM": "СРЕДНЯЯ", "HIGH": "ВЫСОКАЯ"}
 
 if ANDROID:                                          # phones report the accelerometer as a joystick: tilting
     os.environ['SDL_ACCELEROMETER_AS_JOYSTICK'] = '0'  # the phone would press buttons. Turn that off.
@@ -96,7 +99,8 @@ ICON = make_icon()
 pg.display.set_icon(ICON)
 if not hasattr(pg.transform, 'scale_by'):           # Android's pygame is older than pygame-ce: no scale_by
     pg.transform.scale_by = lambda s_, k: pg.transform.scale(s_, (max(1, int(s_.get_width() * k)), max(1, int(s_.get_height() * k))))
-scr = pg.display.set_mode((W, H), pg.SCALED | (pg.FULLSCREEN if ANDROID else pg.RESIZABLE))
+SCREEN_FLAGS = pg.SCALED | (pg.FULLSCREEN if ANDROID else pg.RESIZABLE)
+scr = pg.display.set_mode((W, H), SCREEN_FLAGS)
 pg.display.set_caption("Neon Ronin")
 clock = pg.time.Clock()
 def pick_font(names, size, bold=True):
@@ -602,7 +606,7 @@ def load_settings():
             st[k] = max(0.0, min(1.0, float(v))) if isinstance(v, (int, float)) and not isinstance(v, bool) else d
         elif isinstance(d, int):
             ok = isinstance(v, int) and not isinstance(v, bool)
-            size = len(RAIN_LEVELS) if k == 'rain' else (4 if k == 'diff' else len(ADMIN_CYCLE.get(k, ())) or 10 ** 6)
+            size = {'rain': len(RAIN_LEVELS), 'diff': 4, 'fps_lock': len(FPS_LOCKS), 'gfx': len(GFX_LEVELS)}.get(k) or len(ADMIN_CYCLE.get(k, ())) or 10 ** 6
             st[k] = v if ok and 0 <= v < size else d
         elif isinstance(d, str) and not isinstance(v, str):
             st[k] = d
@@ -813,6 +817,8 @@ RU = {
     "Screen, rain, CRT glow": "Экран, дождь, CRT", "Gamepad and keys": "Геймпад и клавиши", "Language and tests": "Язык и тесты",
     "UP/DOWN select   LEFT/RIGHT change   ENTER / A confirm   ESC / B back":
         "ВВЕРХ/ВНИЗ выбор  ВЛЕВО/ВПРАВО  ENTER/A ок  ESC/B назад",
+    "GRAPHICS": "ГРАФИКА", "FPS LIMIT": "ЛИМИТ FPS", "SHOW FPS": "ПОКАЗЫВАТЬ FPS", "VSYNC": "VSYNC",
+    "UNLIMITED": "БЕЗ ЛИМИТА",
     "LIGHT": "СЛАБЫЙ", "MEDIUM": "СРЕДНИЙ", "HEAVY": "СИЛЬНЫЙ", "ON": "ВКЛ", "OFF": "ВЫКЛ",
     # controls
     "MOVE LEFT": "ВЛЕВО", "MOVE RIGHT": "ВПРАВО", "AIM UP": "ПРИЦЕЛ ВВЕРХ",
@@ -891,7 +897,7 @@ RU = {
     "tap the exact center of the target": "нажми точно в центр мишени",
     "so every button reacts right where you press it": "чтобы кнопки срабатывали ровно там, где жмёшь",
     "drag to move  -  tap, then - / + to resize": "тяни - сдвинуть,  нажми и -/+ - размер",
-    "RESET": "СБРОС",
+    "RESET": "СБРОС", "TAP TO SKIP": "НАЖМИ, ЧТОБЫ ПРОПУСТИТЬ",
     "SPIRITS": "ОДЕРЖИМЫЕ", "KILL 3 SPIRIT-TOUCHED": "УБЕЙ 3 ОДЕРЖИМЫХ", "SHADOW STRIKE": "УДАР ИЗ ТЕНИ",
     "JACKPOT": "ДЖЕКПОТ", "+1 HP, +1 glass HP, +1 slash and slam damage": "+1 HP, +1 стекл. HP, +1 урон удара и удара о землю",
     "UNTOUCHABLE": "НЕПРИКАСАЕМЫЙ", "Blade cuts 3x harder, touching enemies hurts": "Клинок режет x3, касание врагов ранит",
@@ -1027,45 +1033,105 @@ def tr(s):
     return RU.get(s, s) if LANG == 'ru' and isinstance(s, str) else s
 
 
+_TXC, _TXC_CAP = {}, 700                        # bounded caches of rendered text (keys hold the already-translated string)
+_TXS, _WRC, _RSN = {}, {}, {}
+
+
+def rtext(f, s, col):
+    """f.render(s, False, col) from a cache (a 32-bit surface with per-pixel alpha). The result is shared: only blit it."""
+    try:
+        k = (s, f, col)
+        im = _TXC.get(k)
+    except TypeError:
+        col = tuple(col)
+        k = (s, f, col)
+        im = _TXC.get(k)
+    if im is None:
+        if len(_TXC) >= _TXC_CAP:
+            _TXC.clear()
+        im = _TXC[k] = f.render(s, False, col).convert_alpha()
+    return im
+
+
+def _txt_img(s, f, col, line, r, mode):
+    """text() / outlined() as ONE ready-made surface (shadow or outline + text) and the text's x/y offset inside it."""
+    try:
+        k = (s, f, col, line, r, mode)
+        e = _TXS.get(k)
+    except TypeError:
+        col, line = tuple(col), tuple(line)
+        k = (s, f, col, line, r, mode)
+        e = _TXS.get(k)
+    if e is None:
+        if len(_TXS) >= _TXC_CAP:
+            _TXS.clear()
+        img = f.render(s, False, col).convert_alpha()      # (32-bit first: 8-bit colour-keyed sources blit wrongly onto SRCALPHA)
+        sh = f.render(s, False, line).convert_alpha()
+        w, h = img.get_size()
+        if mode:                                   # outlined: 5 copies of the shadow colour round the text
+            surf = pg.Surface((w + 2 * r, h + 2 * r), pg.SRCALPHA)
+            for dx, dy in ((-r, 0), (r, 0), (0, -r), (0, r), (r, r)):
+                surf.blit(sh, (r + dx, r + dy))
+            surf.blit(img, (r, r))
+            e = (surf.convert_alpha(), -r, -r, w)
+        else:                                      # text: a black drop shadow
+            surf = pg.Surface((w + 1, h + 1), pg.SRCALPHA)
+            surf.blit(sh, (1, 1))
+            surf.blit(img, (0, 0))
+            e = (surf.convert_alpha(), 0, 0, w)
+        _TXS[k] = e
+    return e
+
+
+_CBUILD, _CIMG = [False], {}
+
+
 def text(s, f, col, x, y, center=False, surf=None):
     s = tr(s)
     surf = surf or scr
-    img = f.render(s, False, col)
+    img, ox, oy, w = _txt_img(s, f, col, (0, 0, 0), 0, 0)
     if center:
-        x -= img.get_width() // 2
-    surf.blit(f.render(s, False, (0, 0, 0)), (x + 1, y + 1))
+        x -= w // 2
     surf.blit(img, (x, y))
 
 
 def outlined(s, f, col, x, y, line=INK, center=False, r=2):
     s = tr(s)
-    img = f.render(s, False, col)
-    sh = f.render(s, False, line)
+    img, ox, oy, w = _txt_img(s, f, col, line, r, 1)
     if center:
-        x -= img.get_width() // 2
-    for dx, dy in ((-r, 0), (r, 0), (0, -r), (0, r), (r, r)):
-        scr.blit(sh, (x + dx, y + dy))
-    scr.blit(img, (x, y))
+        x -= w // 2
+    scr.blit(img, (x + ox, y + oy))
 
 
 def ransom(txt, x, y, fonts, seed, t, center=False, tilt=-5.0, surf=None, rise=0.0):
     """Persona-style ransom-note lettering: every letter on its own tilted card."""
     txt = tr(txt)
-    rnd = random.Random(seed)
-    styles = [(WHITE, INK), (INK, WHITE), (WHITE, RED), (INK, WHITE), (WHITE, INK)]
+    ck = (txt, seed, tuple(fonts), tilt)
+    base = _RSN.get(ck)
+    if base is None:                                   # the random lettering (cards, tilts, jitter) never changes: build once
+        rnd = random.Random(seed)
+        styles = [(WHITE, INK), (INK, WHITE), (WHITE, RED), (INK, WHITE), (WHITE, INK)]
+        base = []
+        for i, ch in enumerate(txt):
+            if ch == ' ':
+                base.append(None)
+                continue
+            fg, bg = styles[rnd.randrange(len(styles))]
+            f = fonts[rnd.randrange(len(fonts))]
+            g = f.render(ch, False, fg)
+            box = pg.Surface((g.get_width() + 6, g.get_height() + 2), pg.SRCALPHA)
+            box.fill(bg + (255,))
+            box.blit(g, (3, 1))
+            base.append((box, tilt + rnd.uniform(-11, 11), rnd.uniform(-4, 4)))
+        if len(_RSN) >= 200:
+            _RSN.clear()
+        _RSN[ck] = base
     pieces = []
-    for i, ch in enumerate(txt):
-        if ch == ' ':
+    for i, b_ in enumerate(base):
+        if b_ is None:
             pieces.append(None)
             continue
-        fg, bg = styles[rnd.randrange(len(styles))]
-        f = fonts[rnd.randrange(len(fonts))]
-        g = f.render(ch, False, fg)
-        box = pg.Surface((g.get_width() + 6, g.get_height() + 2), pg.SRCALPHA)
-        box.fill(bg + (255,))
-        box.blit(g, (3, 1))
-        ang = tilt + rnd.uniform(-11, 11) + math.sin(t * 2.3 + i * 1.9) * 2.5
-        pieces.append((pg.transform.rotate(box, ang), rnd.uniform(-4, 4)))
+        pieces.append((pg.transform.rotate(b_[0], b_[1] + math.sin(t * 2.3 + i * 1.9) * 2.5), b_[2]))
     total = sum(p[0].get_width() - 4 if p else 9 for p in pieces)
     cx = x - total // 2 if center else x
     for p in pieces:
@@ -1103,15 +1169,21 @@ def rot(pts, cx, cy, a):
 
 
 def wrap(txt, f, w):
-    out, cur = [], ''
-    for wd in txt.split():
-        t = (cur + ' ' + wd).strip()
-        if f.size(t)[0] > w:
-            out.append(cur)
-            cur = wd
-        else:
-            cur = t
-    return out + [cur]
+    k = (txt, f, w)
+    r_ = _WRC.get(k)
+    if r_ is None:
+        out, cur = [], ''
+        for wd in txt.split():
+            t = (cur + ' ' + wd).strip()
+            if f.size(t)[0] > w:
+                out.append(cur)
+                cur = wd
+            else:
+                cur = t
+        if len(_WRC) >= 400:
+            _WRC.clear()
+        r_ = _WRC[k] = out + [cur]
+    return list(r_)
 
 
 def vgrad_rect(surf, r, top, bottom):
@@ -1986,6 +2058,322 @@ def windows(surf, x, top, w, bottom, step, chance, cols, dim=2):
                 surf.fill([v // dim for v in c], (wx, wy, 2, 2))
 
 
+# ---------------------------------------------------------------- opt_w1: cached scenery / cheaper weather
+_OPT_KEY = (255, 0, 255)
+_opt = {}                                    # misc caches
+_opt_wx = {}                                 # weather sheets (only the current weather is kept)
+_opt_win = {}
+
+
+def opt_ck(layer):
+    """A colour-keyed (RLE) twin of an SRCALPHA layer whose alpha is only 0/255 (else the layer itself)."""
+    try:
+        if not (layer.get_flags() & pg.SRCALPHA):
+            return layer
+        w, h = layer.get_size()
+        solid = pg.mask.from_surface(layer, 254).count()
+        if solid != pg.mask.from_surface(layer, 0).count():
+            return layer
+        for key in ((255, 0, 255), (1, 254, 3), (7, 3, 250)):
+            out = pg.Surface((w, h))
+            out.fill(key)
+            out.blit(layer, (0, 0))
+            if pg.mask.from_threshold(out, key, (0, 0, 0, 255)).count() == w * h - solid:
+                out.set_colorkey(key, pg.RLEACCEL)
+                return out
+    except Exception:
+        pass
+    return layer
+
+
+def opt_layer(L, name):
+    k = name + '_k'
+    v = L.get(k)
+    if v is None:
+        v = L[k] = opt_ck(L[name])
+    return v
+
+
+def opt_haze(L, oy):
+    """The haze layer only has pixels in a band of rows: blit just that band."""
+    b = L.get('haze_b')
+    if b is None:
+        rs = pg.mask.from_surface(L['haze'], 0).get_bounding_rects()
+        b = L['haze_b'] = (min(r.top for r in rs), max(r.bottom for r in rs) - min(r.top for r in rs)) if rs else (0, 0)
+    if b[1]:
+        scr.blit(L['haze'], (0, int(oy * .5) + b[0]), (0, b[0], W, b[1]))
+
+
+def opt_beam(L, deg):
+    c = L.get('beam_r')
+    if c is None:
+        c = L['beam_r'] = {}
+    k = int(round(deg * 2))
+    img = c.get(k)
+    if img is None:
+        img = c[k] = pg.transform.rotate(L['beam'], k / 2)
+    return img
+
+
+def opt_txt(text, col):
+    k = (text, col)
+    v = _opt.get(k)
+    if v is None:
+        if len(_opt) > 900:
+            _opt.clear()
+        v = _opt[k] = F_JP.render(text, False, col)
+    return v
+
+
+def opt_trainline():
+    v = _opt.get('trainline')
+    if v is None:
+        v = pg.Surface((W + 70, H * 2))
+        v.fill(_OPT_KEY)
+        pg.draw.rect(v, (18, 8, 30), (0, 0, W + 70, 5))
+        pg.draw.line(v, (255, 60, 160), (0, 0), (W + 70, 0))
+        for px in range(0, W + 70, 70):
+            pg.draw.rect(v, (14, 6, 24), (px, 5, 6, H * 2))
+        v.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt['trainline'] = v
+    return v
+
+
+def opt_blimp():
+    v = _opt.get('blimp')
+    if v is None:
+        v = pg.Surface((104, 26))
+        v.fill(_OPT_KEY)
+        pg.draw.ellipse(v, (40, 30, 62), (8, 0, 96, 26))
+        pg.draw.arc(v, (110, 90, 160), (8, 0, 96, 26), .4, 2.7, 1)
+        pg.draw.polygon(v, (40, 30, 62), [(10, 13), (0, 4), (0, 22)])
+        v.fill((6, 4, 12), (28, 7, 56, 12))
+        v.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt['blimp'] = v
+    return v
+
+
+def opt_car(col, fwd):
+    k = ('car', col, fwd)
+    v = _opt.get(k)
+    if v is None:
+        v = pg.Surface((10, 1))
+        v.fill(_OPT_KEY)
+        dim = tuple(c // 4 for c in col)
+        if fwd:
+            v.fill(dim, (0, 0, 9, 1))
+            v.fill(col, (8, 0, 2, 1))
+        else:
+            v.fill(dim, (0, 0, 9, 1))
+            v.fill(col, (0, 0, 2, 1))
+        v.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt[k] = v
+    return v
+
+
+def opt_wins(env):
+    v = _opt_win.get(env)
+    if v is None:
+        rnd = random.Random(7)
+        cols = {'city': ((255, 220, 140), (140, 220, 255), (255, 120, 200)), 'docks': ((255, 200, 120), (120, 255, 200)),
+                'temple': ((255, 170, 90), (255, 120, 60)), 'peaks': ((255, 190, 110),), 'dojo': ((255, 190, 110), (255, 140, 80))}[env]
+        v = []
+        for i in range(40):
+            wx = rnd.uniform(0, 1500)
+            wy = rnd.uniform(GY - 150, GY - 70)
+            rate, ph = rnd.uniform(.05, .25), rnd.uniform(0, 6.3)
+            c = cols[i % len(cols)]
+            v.append((wx, wy, rate * 6, ph, tuple(q // 2 for q in c), tuple(q // 6 for q in c) if i % 9 == 0 else None))
+        _opt_win[env] = v
+    return v
+
+
+def opt_over(L):
+    """The CRT overlay as an opaque multiply layer (same darkening as the alpha one, cheaper to blit)."""
+    m = L.get('over_m')
+    if m is None:
+        m = pg.Surface((W, H))
+        m.fill((255, 255, 255))
+        m.blit(L['over'], (0, 0))
+        L['over_m'] = m
+    return m
+
+
+def _opt_trim(d, n=160):
+    if len(d) > n:
+        d.clear()
+
+
+def opt_tower(tx, tw, ttop, wins, col):
+    """A skyscraper body as a sprite built at the sub-pixel phase of its position (pygame truncates every coordinate)."""
+    k = ('tw', tx, tw, ttop, col)
+    e = _opt.get(k)
+    if e is None or e[0] is not wins:
+        fx, fy = tx - math.floor(tx), ttop - math.floor(ttop)
+        gy_ = GY - math.floor(ttop) + 2
+        sp = pg.Surface((int(fx + tw) + 2, gy_ + 1))
+        sp.fill(_OPT_KEY)
+        x, y = fx, fy + 2
+        pg.draw.rect(sp, (15, 7, 28), (x, y, tw, GY - ttop))
+        pg.draw.line(sp, (80, 40, 110), (x, y), (x, gy_))
+        pg.draw.line(sp, (80, 40, 110), (x + tw - 1, y), (x + tw - 1, gy_))
+        pg.draw.line(sp, col, (x, y), (x + tw, y))
+        for wx, wy, wc in wins:
+            sp.fill(wc, (x + wx, y + wy, 3, 4))
+        sp.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt_trim(_opt, 900)
+        e = _opt[k] = (wins, sp)
+    return e[1]
+
+
+def opt_facade(p):
+    k = ('fa', id(p))
+    e = _opt.get(k)
+    if e is None or e[0] is not p or e[1] != (p.w, p.x, p.y, len(p.win)):
+        fx, fy = p.x - math.floor(p.x), p.y - math.floor(p.y)
+        gy_ = GY - math.floor(p.y) + 2
+        sp = pg.Surface((int(fx + p.w) + 2, gy_ + 1))
+        sp.fill(_OPT_KEY)
+        x, y = fx, fy + 2
+        pg.draw.rect(sp, (17, 8, 30), (x + 3, y + 8, p.w - 6, GY - p.y - 8))
+        pg.draw.line(sp, (70, 36, 100), (x + 3, y + 8), (x + 3, gy_))
+        pg.draw.line(sp, (70, 36, 100), (x + p.w - 4, y + 8), (x + p.w - 4, gy_))
+        for wx, wy, col in p.win:
+            sp.fill(tuple(c // 2 for c in col), (x + wx, y + wy, 4, 4))
+        sp.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt_trim(_opt, 900)
+        e = _opt[k] = (p, (p.w, p.x, p.y, len(p.win)), sp)
+    return e[2]
+
+
+def opt_scaf(sx0, sx1, stop):
+    """Scaffolding drawn once (poles + braces) at oy = 0, origin (int(sx0) - 4, int(stop) - 4)."""
+    k = ('sc', sx0, sx1, stop)
+    sp = _opt.get(k)
+    if sp is None:
+        x0, y0 = int(sx0) - 4, int(stop) - 4
+        w, h = int(sx1) - int(sx0) + 29 + 10, GY + 30 - y0
+        sp = pg.Surface((w, h))
+        sp.fill(_OPT_KEY)
+        for px in range(int(sx0), int(sx1) + 1, 29):
+            x = px - x0
+            pg.draw.line(sp, (52, 40, 70), (x, stop - y0), (x, GY - y0), 2)
+            for py in range(int(stop), GY, 27):
+                pg.draw.line(sp, (34, 26, 48), (x, py - y0), (x + 29, py + 27 - y0))
+        sp.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt_trim(_opt, 900)
+        _opt[k] = sp
+    return sp
+
+
+def opt_grid(off, step, k, colv, colh, ys, x0=-60):
+    """Perspective grid of the street / arena floor, one sprite per scroll offset; origin = the ground line."""
+    key = ('gr', off, step, k, colv, colh, ys)
+    sp = _opt.get(key)
+    if sp is None:
+        sp = pg.Surface((W, FLOOR + 1))
+        sp.fill(_OPT_KEY)
+        for gx in range(x0, W + 60, step):
+            wx = gx - off
+            pg.draw.line(sp, colv, (wx, 1), (W / 2 + (wx - W / 2) * k, FLOOR))
+        for yy in ys:
+            pg.draw.line(sp, colh, (0, yy), (W, yy))
+        sp.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt_trim(_opt, 900)
+        _opt[key] = sp
+    return sp
+
+
+def opt_slab(p, th):
+    """The static platform's slab: sprite A (under the glow) and B (the edge lines over it), at the sub-pixel phase of p."""
+    key = ('sl', p.x, p.y, p.w, th['slab'], th['line'], th['under'], th['edge'])
+    e = _opt.get(key)
+    if e is None:
+        fx, fy, w = p.x - math.floor(p.x), p.y - math.floor(p.y), p.w
+        x, y = fx, fy + 2
+        sw = int(fx + w) + 2
+        a = pg.Surface((sw, 22))
+        a.fill(_OPT_KEY)
+        for sx in range(int(x) + 4, int(x + w) - 2, 18):
+            pg.draw.line(a, th['slab'], (sx, y + 8), (sx, y + 16))
+        pg.draw.rect(a, th['slab'], (x, y, w, 8))
+        pg.draw.line(a, th['line'], (x, y + 3), (x + w, y + 3))
+        pg.draw.line(a, th['under'], (x, y + 8), (x + w, y + 8))
+        a.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        b = pg.Surface((sw, 22))
+        b.fill(_OPT_KEY)
+        pg.draw.line(b, tuple(c // 4 for c in th['edge']), (x, y - 1), (x + w, y - 1))
+        pg.draw.line(b, th['edge'], (x, y), (x + w, y))
+        b.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+        _opt_trim(_opt, 900)
+        e = _opt[key] = (a, b)
+    return e
+
+
+def opt_rain(n, drizzle):
+    """Rain as 3 scrolling colour-keyed sheets (different speeds) + 5 splash sheets."""
+    key = ('rain', n, drizzle)
+    v = _opt_wx.get(key)
+    if v is None:
+        _opt_wx.clear()
+        rnd = random.Random(11)
+        m = n // 2 if drizzle else n
+        lay = []
+        for sp, Ht in ((275, 270), (315, 300), (360, 330)):
+            S = pg.Surface((2 * W, 2 * Ht))
+            S.fill(_OPT_KEY)
+            for _ in range(max(1, m // 3)):
+                x, y, ln = rnd.uniform(0, W), rnd.uniform(0, Ht), rnd.uniform(4, 9)
+                for i in (-1, 0, 1, 2):
+                    for j in (-1, 0, 1, 2):
+                        pg.draw.line(S, (120, 130, 200), (x + i * W, y + j * Ht), (x + i * W - ln * .25, y + j * Ht + ln))
+            S.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+            lay.append((S, sp, Ht))
+        spl = []
+        sh = FLOOR + 40
+        for _ in range(5):
+            S = pg.Surface((W, sh))
+            S.fill(_OPT_KEY)
+            for _ in range(int(m * .19 * sh / FLOOR)):
+                x, y = rnd.uniform(1, W - 2), rnd.uniform(1, sh - 1)
+                S.fill((160, 170, 230), (x - 1, y - 1, 1, 1))
+                S.fill((160, 170, 230), (x + 1, y - 1, 1, 1))
+            S.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+            spl.append(S)
+        v = _opt_wx[key] = (lay, spl)
+    return v
+
+
+def opt_snow(weather, n):
+    key = ('snow', weather, n)
+    v = _opt_wx.get(key)
+    if v is None:
+        _opt_wx.clear()
+        rnd = random.Random(13)
+        v = []
+        for sp, ph in ((16, .7), (31, 3.4), (22, 5.1), (27, 1.9)):
+            sheets = []
+            flakes = [(rnd.uniform(0, W), rnd.uniform(0, H), rnd.choice((1, 1, 2))) for _ in range(n // 4)]
+            for var in ((0, 1) if weather == 'petals' else (0,)):
+                S = pg.Surface((2 * W, 2 * H))
+                S.fill(_OPT_KEY)
+                for x, y, sz in flakes:
+                    if weather == 'petals':
+                        col = (255, 176, 204) if sz > 1 else (236, 130, 170)
+                        rw, rh = (2, 1) if var == 0 else (1, 2)
+                    else:
+                        col = (236, 230, 244) if sz > 1 else (200, 190, 214)
+                        rw = rh = sz
+                    for i in (0, 1):
+                        for j in (0, 1):
+                            S.fill(col, (x + i * W, y + j * H, rw, rh))
+                S.set_colorkey(_OPT_KEY, pg.RLEACCEL)
+                sheets.append(S)
+            v.append((sheets[0], sheets[-1] if len(sheets) > 1 else None, sp, ph))
+        _opt_wx[key] = v
+    return v
+
+
 def bake():
     L = {}
     sky = pg.Surface((W, H))
@@ -2856,6 +3244,14 @@ class Game:
         s.music_volume()
         n = RAIN_LEVELS[st['rain']][1]
         s.rain = (s.rain + [[R(0, W), R(0, H), R(4, 9), R(250, 380)] for _ in range(n)])[:n]
+        want = st.get('fps_lock', 2) == 0                       # FPS LIMIT: VSYNC
+        if want != getattr(s, 'vsync_on', False):
+            global scr
+            try:
+                scr = pg.display.set_mode((W, H), SCREEN_FLAGS, vsync=1 if want else 0)
+            except (pg.error, TypeError):                       # (no vsync on this system: run unlimited)
+                scr = pg.display.set_mode((W, H), SCREEN_FLAGS)
+            s.vsync_on, s.fs_on = want, False                   # (a re-opened window is not fullscreen)
         if st['fullscreen'] != s.fs_on:
             try:
                 pg.display.toggle_fullscreen()
@@ -2960,7 +3356,7 @@ class Game:
                     dx, dy = f[0] - f[3], f[1] - f[4]
                     h['left'] |= dx < -sr * .25
                     h['right'] |= dx > sr * .25
-                    h['up'] |= dy < -sr * .55 and abs(dy) > abs(dx) * .7
+                    h['up'] |= dy < -sr * .65 and -dy > abs(dx) * 1.2
                     h['down'] |= dy > sr * .65 and dy > abs(dx) * 1.2     # strict: a drifting thumb isn't "down"
                 elif f[2] == 'jump':
                     h['jump'] = True
@@ -2999,6 +3395,9 @@ class Game:
             s.tedit_event(kind, fid, x, y)
             return
         s.last_input = 'touch'
+        if s.typing and kind == 'down':                           # typing the name: a tap finishes it
+            s.finish_name(True)
+            return
         if s.state != 'play':                                     # menus: a tap is the mouse moving there and clicking
             if kind == 'down':                                    # (menus pick on the first tap, open on the second)
                 s.ptr = (x, y)
@@ -3009,9 +3408,17 @@ class Game:
             s.fingers.pop(fid, None)
             return
         f = s.fingers.get(fid)
-        if kind == 'move':                                        # a finger keeps the control it first pressed
+        if kind == 'move' and f is None:                          # (a finger still down from before a pause or a screen:
+            kind = 'down'                                         #  it counts as pressed now)
+        if kind == 'move':                                        # a finger keeps the control it first pressed...
             if f is not None:
                 f[0], f[1] = x, y
+                if f[2] != 'stick':                               # ...unless it slides onto another button
+                    a = s.touch_button(x, y)
+                    if a and a != f[2]:
+                        f[2] = a
+                        s.act.add(a)
+                        s.atk_rep = .25
                 if f[2] == 'stick' and s.settings['float_stick']:  # the base trails the thumb: reversing is instant
                     sr = L['stick'][2]
                     d = math.hypot(x - f[3], y - f[4])
@@ -3022,12 +3429,12 @@ class Game:
         if a:
             s.fingers[fid] = [x, y, a]
             s.act.add(a)
-            s.atk_rep = .32
+            s.atk_rep = .25
         elif not any(g[2] == 'stick' for g in s.fingers.values()):
             sx, sy, sr = L['stick']
             if s.settings['float_stick']:
                 if x < W * .5:                                    # floating: left half, the stick appears under the thumb
-                    s.fingers[fid] = [x, y, 'stick', max(sr, x), max(sr + 20, min(H - sr * .6, y))]
+                    s.fingers[fid] = [x, y, 'stick', x, y]
             elif math.hypot(x - sx, y - sy) < sr * 1.6:          # fixed: only around its own spot
                 s.fingers[fid] = [x, y, 'stick', sx, sy]
 
@@ -3043,7 +3450,7 @@ class Game:
             s.atk_rep -= dt
             if s.atk_rep <= 0:
                 s.act.add('atk')
-                s.atk_rep = .2
+                s.atk_rep = .17
 
     @staticmethod
     def touch_sprite(kind, r, label, state):
@@ -3057,9 +3464,9 @@ class Game:
             if kind == 'knob':
                 pg.draw.circle(img, (255, 255, 255, 130 if state else 70), c, r)
             else:
-                fill = {'on': (215, 20, 40, 160), 'dim': (20, 10, 30, 40), 'off': (20, 10, 30, 80)}[state]
+                fill = {'on': (215, 20, 40, 170), 'dim': (20, 10, 30, 60), 'off': (20, 10, 30, 120)}[state]
                 pg.draw.circle(img, fill, c, r)
-                pg.draw.circle(img, (255, 255, 255, 60 if state == 'dim' else 150), c, r, 2)
+                pg.draw.circle(img, (255, 255, 255, 80 if state == 'dim' else 200), c, r, 2)
                 if label:
                     t = F_S.render(TOUCH_RU.get(label, label) if LANG == 'ru' else label, True, WHITE)
                     if t.get_width() > r * 2 - 2:
@@ -3176,6 +3583,8 @@ class Game:
         s.go('tcal', 0)
 
     def tcal_tap(s, nx, ny):
+        if len(s.tcal_raw) >= 2 or s.wipe_fn is not None:        # (already measured: stray taps change nothing)
+            return
         s.tcal_raw.append((nx, ny))
         sfx('sel')
         if len(s.tcal_raw) < 2:
@@ -3211,7 +3620,7 @@ class Game:
             s.go(s.tcal_after, 0)
 
     def bind_name(s, kind, a):
-        if TOUCH and s.last_input == 'touch':                    # phones: the on-screen button's name
+        if TOUCH:                                                # phones: the on-screen button's name
             lab = TOUCH_LABELS.get(a, a.upper())
             return TOUCH_RU.get(lab, lab) if LANG == 'ru' else lab
         if kind == 'kb':
@@ -3262,7 +3671,7 @@ class Game:
             if s.typing:                                         # editing the player's name
                 if ev.key == pg.K_BACKSPACE:
                     s.name_buf = s.name_buf[:-1]
-                elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_ESCAPE):
+                elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_ESCAPE, pg.K_AC_BACK):
                     s.finish_name(ev.key != pg.K_ESCAPE)
                 return
             s.act.update(a for a, key in s.settings['kb'].items() if key == ev.key)
@@ -3781,6 +4190,9 @@ class Game:
 
     # ---------- particles
     def burst(s, x, y, n, col, spd=120, life=(.3, .7), size=(1, 2.5), grav=500, glowing=False, dirx=0):
+        k = GFX_LEVELS[s.settings.get('gfx', 2)][1]
+        if k < 1:
+            n = int(n * k + random.random())
         for _ in range(n):
             l = R(*life)
             s.parts.append([x, y, dirx * R(30, 160) + R(-spd, spd) * (.4 if dirx else 1), R(-spd, spd * .2),
@@ -7307,12 +7719,13 @@ class Game:
         save_stats(st)
 
     # ---------- rendering: characters
-    def compose(s, m, D, sx, sy, S, flash=False, target=None):
+    def compose(s, m, D, sx, sy, S, flash=False, target=None, bx=0, by=0):
         """Outline + back-light rim around a painted sprite (gives the clean pixel-art look)."""
         T = target or scr
         ol = m.to_surface(setcolor=S['line'] + (255,), unsetcolor=(0, 0, 0, 0))
         for ddx, ddy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            T.blit(ol, (sx + ddx, sy + ddy))
+            T.blit(ol, (int(sx + ddx) + bx, int(sy + ddy) + by))
+        sx, sy = int(sx) + bx, int(sy) + by
         if flash:
             T.blit(m.to_surface(setcolor=(255, 255, 255, 255), unsetcolor=(0, 0, 0, 0)), (sx, sy))
             return
@@ -7337,18 +7750,23 @@ class Game:
             D = pg.transform.scale(D, (int(96 * zx), int(96 * zy)))
             info = {k: ((v[0] * zx, v[1] * zy) if isinstance(v, tuple) and len(v) == 2 else v) for k, v in info.items()}
         org = (wx - 48 * zx, wy - 84 * zy)
-        m = pg.mask.from_surface(D)
         sx, sy = org[0] - cx, org[1] + oy
+        rs = pg.mask.from_surface(D).get_bounding_rects()                # crop: small masks, cheap outline/rim/ghosts
+        br = rs[0].unionall(rs[1:]).inflate(2, 2).clip(D.get_rect()) if rs else D.get_rect()
+        bx, by = br.x, br.y
+        if br.size != D.get_size():
+            D = D.subsurface(br)
+        m = pg.mask.from_surface(D)
         if hide:                                                   # INVISIBILITY: only a cold shimmer of you
-            s.ghosts.append([m, org[0], org[1], .1, (70, 80, 150), .1])
+            s.ghosts.append([m, org[0], org[1], .1, (70, 80, 150), .1, bx, by])
             return info, sx, sy
-        s.compose(m, D, sx, sy, S, flash)
+        s.compose(m, D, sx, sy, S, flash, None, bx, by)
         if not flash:
             glow(scr, sx + info['eye'][0], sy + info['eye'][1], 7, S['eyeglow'])
             if info['blade'] and P.get('hot', 0) > 0:
                 glow(scr, sx + info['blade'][0], sy + info['blade'][1], 12, qcol((40, 80, 110), P['hot']))
         if ghost and s.state == 'play':
-            s.ghosts.append([m, org[0], org[1], ghost[0], ghost[1], ghost[0]])
+            s.ghosts.append([m, org[0], org[1], ghost[0], ghost[1], ghost[0], bx, by])
         return info, sx, sy
 
     def player_pose(s):
@@ -7455,9 +7873,10 @@ class Game:
         scr.blit(layer, (0, 0), special_flags=pg.BLEND_RGB_ADD)
 
     def draw_ghosts(s, cx, oy):
-        for m, wx, wy, life, col, ml in s.ghosts:
+        for gh in s.ghosts:
+            m, wx, wy, life, col, ml = gh[:6]
             img = m.to_surface(setcolor=qcol(col, life / ml * .8) + (255,), unsetcolor=(0, 0, 0, 0))
-            scr.blit(img, (wx - cx, wy + oy), special_flags=pg.BLEND_RGB_ADD)
+            scr.blit(img, (int(wx - cx) + gh[6], int(wy + oy) + gh[7]), special_flags=pg.BLEND_RGB_ADD)
 
     def draw_spirit(s, e, cx, oy):
         """A spirit-touched enemy (SHADOW CLOAK): a small ghost circling its head and wind curling round its body."""
@@ -7592,9 +8011,14 @@ class Game:
             ln = 260
             k = abs(math.cos(a))
             pts = [(x0, y0), (x0 + math.cos(a) * ln, y0 - 14 + math.sin(a) * 8), (x0 + math.cos(a) * ln, y0 + 14 + math.sin(a) * 8)]
-            beam = pg.Surface((W, H), pg.SRCALPHA)
-            pg.draw.polygon(beam, (200, 230, 210, int(26 * k)), pts)
-            scr.blit(beam, (0, 0))
+            al = int(26 * k)
+            if al > 0:                                             # (only the polygon's bounding box, not a full-screen alpha layer)
+                bx0, by0 = max(0, int(min(q[0] for q in pts)) - 1), max(0, int(min(q[1] for q in pts)) - 1)
+                bx1, by1 = min(W, int(max(q[0] for q in pts)) + 2), min(H, int(max(q[1] for q in pts)) + 2)
+                if bx1 > bx0 and by1 > by0:
+                    beam = pg.Surface((bx1 - bx0, by1 - by0), pg.SRCALPHA)
+                    pg.draw.polygon(beam, (200, 230, 210, al), [(q[0] - bx0, q[1] - by0) for q in pts])
+                    scr.blit(beam, (bx0, by0))
             glow(scr, x0, y0, 14, qcol((90, 90, 60), .5 + .5 * k))
         elif env == 'temple':
             for i in range(9):                                     # sky lanterns drifting up past the moon
@@ -7602,29 +8026,31 @@ class Game:
                 y = (GY - 60) - (s.t * (6 + i % 4) + i * 41) % 200
                 glow(scr, x, y, 8, (90, 40, 10))
                 scr.fill((255, 190, 110), (x - 1, y - 2, 3, 4))
-        scr.blit(L['far'], (-int(cam * .15), int(oy * .15)))
+        scr.blit(opt_layer(L, 'far'), (-int(cam * .15), int(oy * .15)))
         s.bg_life_far(env, cam, oy)
-        scr.blit(L['mid'], (-int(cam * .4), int(oy * .4)))
+        scr.blit(opt_layer(L, 'mid'), (-int(cam * .4), int(oy * .4)))
         s.bg_life_mid(env, cam, oy)
         if env == 'docks':
             fw = L['fog'].get_width() - W
             for i, (sp, yy) in enumerate(((8, GY - 120), (14, GY - 80))):
                 off = int(s.t * sp + i * 90) % fw
                 scr.blit(L['fog'], (-off, yy + oy * .5))
-        scr.blit(L['haze'], (0, int(oy * .5)))
-        scr.blit(L['near'], (-int(cam * .7), int(oy * .7)))
+        opt_haze(L, oy)
+        scr.blit(opt_layer(L, 'near'), (-int(cam * .7), int(oy * .7)))
 
     def bg_life_far(s, env, cam, oy):
         """Things moving far away: sky traffic over the city, a ship on the horizon at the docks, crows over the temple."""
         t_ = s.t
         if env == 'city':                                        # two lanes of flying cars, each way
+            cars = []
             for lane, (y0, sp, col) in enumerate(((58, 46, (255, 240, 200)), (66, -38, (255, 70, 90)), (96, 60, (200, 230, 255)),
                                                   (104, -52, (255, 90, 120)))):
-                y = y0 + oy * .25 + math.sin(t_ * .7 + lane) * 1.5
+                y = int(y0 + oy * .25 + math.sin(t_ * .7 + lane) * 1.5)
+                spr, dx = opt_car(col, sp > 0), (8 if sp > 0 else 0)
+                base = lane * 41 + t_ * sp - cam * .25
                 for j in range(6):
-                    x = (j * 97 + lane * 41 + t_ * sp - cam * .25) % (W + 60) - 30
-                    scr.fill(col, (x, y, 2, 1))
-                    pg.draw.line(scr, tuple(c // 4 for c in col), (x - (8 if sp > 0 else -8), y), (x, y))
+                    cars.append((spr, (int((j * 97 + base) % (W + 60) - 30) - dx, y)))
+            scr.blits(cars, False)
         elif env == 'docks':                                     # a freighter crossing the horizon, its lights in the fog
             x = (t_ * 6 - cam * .1) % (W + 300) - 150
             y = GY - 104 + oy * .15
@@ -7651,21 +8077,19 @@ class Game:
         """Closer: windows switching on and off in the buildings, signals and lamps blinking."""
         t_ = s.t
         off = cam * .4
-        rnd = random.Random(7)
         if env == 'forest':                                      # (no windows in the sea of trees)
             return
-        cols = {'city': ((255, 220, 140), (140, 220, 255), (255, 120, 200)), 'docks': ((255, 200, 120), (120, 255, 200)),
-                'temple': ((255, 170, 90), (255, 120, 60)), 'peaks': ((255, 190, 110),), 'dojo': ((255, 190, 110), (255, 140, 80))}[env]
-        for i in range(40):                                      # windows lit at random moments, each on its own rhythm
-            wx = rnd.uniform(0, 1500)
-            wy = rnd.uniform(GY - 150, GY - 70)
-            rate, ph = rnd.uniform(.05, .25), rnd.uniform(0, 6.3)
+        k10 = int(t_ * 10)                                       # which windows are lit is re-decided 10x a second
+        st = getattr(s, '_wlit', None)
+        if st is None or st[0] != env or st[1] != k10:
+            tq = k10 * .1
+            st = s._wlit = (env, k10, [w for w in opt_wins(env) if math.sin(tq * w[2] + w[3]) > .55])
+        oy4 = oy * .4
+        for wx, wy, _r, _p, c, gc in st[2]:                      # windows lit at random moments, each on its own rhythm
             x = (wx - off) % (W + 40) - 20
-            if math.sin(t_ * rate * 6 + ph) > .55:
-                c = cols[i % len(cols)]
-                scr.fill(tuple(v // 2 for v in c), (x, wy + oy * .4, 3, 3))
-                if i % 9 == 0:
-                    glow(scr, x + 1, wy + oy * .4 + 1, 5, tuple(v // 6 for v in c))
+            scr.fill(c, (x, wy + oy4, 3, 3))
+            if gc:
+                glow(scr, x + 1, wy + oy4 + 1, 5, gc)
         for i in range(5 if env in ('city', 'docks', 'temple') else 0):   # aircraft warning lights on the tall roofs
             x = (i * 230 + 80 - off) % (W + 40) - 20
             y = GY - 160 - (i % 3) * 18 + oy * .4
@@ -7697,23 +8121,20 @@ class Game:
                 pg.draw.lines(scr, (230, 220, 255), False, pts, 2)
         for i, bx in enumerate((60, 230, 400)):                 # sweeping searchlights
             a = math.radians(90 + math.sin(s.t * .4 + i * 2.1) * 35)
-            img = pg.transform.rotate(L['beam'], math.degrees(a))
+            img = opt_beam(L, math.degrees(a))
             ox, oyy = (bx - cam * .15) % (W + 120) - 60, GY - 40 + oy * .15
             scr.blit(img, img.get_rect(center=(ox + math.cos(a) * 120, oyy - math.sin(a) * 120)), special_flags=pg.BLEND_RGB_ADD)
         s.blimp += dt * 8                                       # advertising blimp
         bx = (s.blimp - cam * .08) % (W + 240) - 120
         by = 34 + oy * .08 + math.sin(s.t * .5) * 3
-        pg.draw.ellipse(scr, (40, 30, 62), (bx, by, 96, 26))
-        pg.draw.arc(scr, (110, 90, 160), (bx, by, 96, 26), .4, 2.7, 1)
-        pg.draw.polygon(scr, (40, 30, 62), [(bx + 2, by + 13), (bx - 8, by + 4), (bx - 8, by + 22)])
-        scr.fill((6, 4, 12), (bx + 20, by + 7, 56, 12))
-        msg = F_JP.render("ネオン浪人 ◆ NEO TOKYO ◆ 新宿 ◆ ", False, hue(s.t * 40))
+        scr.blit(opt_blimp(), (int(bx) - 8, int(by)))
+        msg = opt_txt("ネオン浪人 ◆ NEO TOKYO ◆ 新宿 ◆ ", hue(s.t * 40))
         off = int(s.t * 20) % msg.get_width()
         scr.blit(msg, (bx + 21, by + 7), (off, 0, 54, 12))
         scr.blit(msg, (bx + 21 + msg.get_width() - off, by + 7), (0, 0, max(0, 54 - (msg.get_width() - off)), 12))
         if int(s.t * 2) % 2:
             glow(scr, bx - 6, by + 13, 6, (90, 0, 0))
-        scr.blit(L['far'], (-int(cam * .15), int(oy * .15)))
+        scr.blit(opt_layer(L, 'far'), (-int(cam * .15), int(oy * .15)))
         s.bg_life_far('city', cam, oy)
         for i in range(4):                                      # drones
             dxp = (i * 137 + s.t * (18 + i * 7)) % (W + 40) - 20
@@ -7721,13 +8142,10 @@ class Game:
             scr.fill((20, 14, 30), (dxp - 2, dyp, 5, 2))
             if int(s.t * 3 + i) % 2:
                 glow(scr, dxp, dyp, 5, (90, 10, 10) if i % 2 else (10, 90, 30))
-        scr.blit(L['mid'], (-int(cam * .4), int(oy * .4)))
+        scr.blit(opt_layer(L, 'mid'), (-int(cam * .4), int(oy * .4)))
         s.bg_life_mid('city', cam, oy)
         ty = GY - 128 + oy * .55                               # elevated train line
-        pg.draw.rect(scr, (18, 8, 30), (0, ty, W, 5))
-        pg.draw.line(scr, (255, 60, 160), (0, ty), (W, ty))
-        for px in range(-(int(cam * .55) % 70), W, 70):
-            pg.draw.rect(scr, (14, 6, 24), (px, ty + 5, 6, H))
+        scr.blit(opt_trainline(), (-(int(cam * .55) % 70), int(ty)))
         s.trainT -= dt
         if s.train is None and s.trainT <= 0:
             s.train = [cam * .55 + W + 40, -230.0]
@@ -7744,10 +8162,37 @@ class Game:
             glow(scr, tx - 2, ty - 9, 18, (120, 120, 100))
             if tx < -320:
                 s.train, s.trainT = None, R(10, 18)
-        scr.blit(L['haze'], (0, int(oy * .5)))
-        scr.blit(L['near'], (-int(cam * .7), int(oy * .7)))
+        opt_haze(L, oy)
+        scr.blit(opt_layer(L, 'near'), (-int(cam * .7), int(oy * .7)))
 
     def draw_rain(s, gys):
+        weather = s.theme.get('weather', 'rain')
+        if weather == 'spores':
+            return s.draw_rain_old(gys)
+        s._rt = rt = getattr(s, '_rt', 0.0) + s.dt
+        if weather in ('snow', 'blizzard', 'petals'):                # flakes: scrolling sheets, one blit per layer
+            lay = opt_snow(weather, {'snow': 110, 'blizzard': 170, 'petals': 70}[weather])
+            wind = {'snow': -10, 'blizzard': -80, 'petals': -22}[weather]
+            mul = 1.7 if weather == 'blizzard' else (.7 if weather == 'petals' else 1)
+            K = len(lay)
+            for k, (A, B, sp, ph) in enumerate(lay):
+                dx = wind * rt - 10.769 * (math.cos(1.3 * rt + ph) - math.cos(ph))
+                S = B if (B is not None and math.sin(rt * 6 + ph * 3) <= 0) else A
+                h = H if gys >= H else min(H, int(gys + (H - gys) * (k + 1) / K))     # (flakes thin out towards the bottom)
+                scr.blit(S, (0, 0), (int(-dx) % W, int(-sp * mul * rt) % H, W, h))
+            return
+        if weather == 'fog' and 'fog' in s.LT.get('docks', {}):   # the docks: a low fog bank rolling past in front
+            fog = s.LT['docks']['fog']
+            off = int(s.t * 22) % (fog.get_width() - W)
+            scr.blit(fog, (-off, gys - 40))
+        if s.rain:
+            lay, spl = opt_rain(len(s.rain), weather == 'fog')
+            for S, sp, Ht in lay:
+                scr.blit(S, (0, 0), (int(sp * .25 * rt) % W, int(-sp * rt) % Ht, W, H))
+            if gys < H:
+                scr.blit(spl[(int(rt * 20) * 3) % 5], (0, gys))
+
+    def draw_rain_old(s, gys):
         weather = s.theme.get('weather', 'rain')
         if weather in ('snow', 'blizzard', 'spores', 'petals'):    # snow / a peak blizzard / forest spores / sakura petals
             n = {'snow': 110, 'blizzard': 170, 'spores': 50, 'petals': 70}[weather]
@@ -8125,7 +8570,7 @@ class Game:
             pg.draw.rect(scr, (8, 4, 14), (x, y - 32, 42, 22))
             glow(scr, x + 21, y - 21, 30, tuple(c // 4 for c in col))
             pg.draw.rect(scr, col, (x, y - 32, 42, 22), 1)
-            msg = F_JP.render("ネオン浪人 新宿 未来 ", False, col)
+            msg = opt_txt("ネオン浪人 新宿 未来 ", col)
             off = int(s.t * 25 + x) % msg.get_width()
             scr.blit(msg, (x + 2, y - 28), (off, 0, 38, 14))
             if msg.get_width() - off < 38:
@@ -8161,14 +8606,11 @@ class Game:
                 return
             for kind, rx, col in p.props:
                 s.draw_prop(kind, x + rx, y, col)
-            for sx in range(int(x) + 4, int(x + w) - 2, 18):
-                pg.draw.line(scr, th['slab'], (sx, y + 8), (sx, y + 16))
-            pg.draw.rect(scr, th['slab'], (x, y, w, 8))
-            pg.draw.line(scr, th['line'], (x, y + 3), (x + w, y + 3))
-            pg.draw.line(scr, th['under'], (x, y + 8), (x + w, y + 8))
+            sa, sb_ = opt_slab(p, th)                            # (cached slab sprites; the glow stays live between them)
+            bp = (math.floor(p.x) - cx, math.floor(p.y) + oy - 2)
+            scr.blit(sa, bp)
             glow(scr, x + w / 2, y + 9, int(w / 2), th['glow'], .2)
-            pg.draw.line(scr, tuple(c // 4 for c in th['edge']), (x, y - 1), (x + w, y - 1))
-            pg.draw.line(scr, th['edge'], (x, y), (x + w, y))
+            scr.blit(sb_, bp)
             if getattr(p, 'eave', False):                          # pagoda: a wooden storey under each roof
                 bw, by = w - 26, y + 9
                 pg.draw.rect(scr, (52, 14, 14), (x + 13, by, bw, 45))
@@ -8190,7 +8632,7 @@ class Game:
                 pg.draw.line(scr, (24, 10, 34), (sx + 6, y + 8), (sx + 6, y + 12))
                 pg.draw.rect(scr, (10, 3, 15), (sx, y + 12, 13, 15))
                 pg.draw.rect(scr, col, (sx, y + 12, 13, 15), 1)
-                scr.blit(F_JP.render(ch, False, col), (sx + 1, y + 13))
+                scr.blit(opt_txt(ch, col), (sx + 1, y + 13))
                 glow(scr, sx + 6, y + 19, 14, tuple(c // 4 for c in col))
         elif p.kind == 'move':
             if p.axis == 'y':
@@ -8219,12 +8661,15 @@ class Game:
         if fh <= 0:
             return
         top = max(0, gys - fh)
-        src = pg.transform.flip(scr.subsurface((0, top, W, gys - top)).copy(), False, True)
+        src = pg.transform.flip(scr.subsurface((0, top, W, gys - top)), False, True)
         src.fill((150, 130, 175), special_flags=pg.BLEND_RGB_MULT)
         scr.fill((6, 3, 12), (0, gys, W, fh))
-        for y in range(min(fh, gys - top)):
-            off = math.sin(y * .9 + s.t * 5) * (.5 + y * .04)
-            scr.blit(src, (off, gys + y), (0, y, W, 1))
+        t5 = s.t * 5
+        sb, cb = math.sin(t5), math.cos(t5)
+        tab = _opt.get('rippl')
+        if tab is None:
+            tab = _opt['rippl'] = [(math.sin(y * .9), math.cos(y * .9), .5 + y * .04) for y in range(H)]
+        scr.blits([(src, (int((sa * cb + ca * sb) * am), gys + y), (0, y, W, 1)) for y, (sa, ca, am) in enumerate(tab[:min(fh, gys - top)])], False)
         scr.blit(s.L['floor'], (0, gys))
 
     def draw_coin(s, x, y, mythic, ph):
@@ -8271,7 +8716,7 @@ class Game:
                     wave = math.sin(s.t * 3 + px) * 2
                     pg.draw.polygon(scr, (170, 20, 34), [(x + 1, GY - 72 + oy), (x + 14 + wave, GY - 68 + oy),
                                                          (x + 13 + wave, GY - 40 + oy), (x + 1, GY - 44 + oy)])
-                    g = F_JP.render("戦", False, (20, 4, 8))
+                    g = opt_txt("戦", (20, 4, 8))
                     scr.blit(g, (x + 2 + wave / 2, GY - 64 + oy))
         for c in s.chests:                              # treasure chests on the hidden ledges
             x, y = c[0] - cx, c[1] + oy
@@ -8292,28 +8737,21 @@ class Game:
         for tx, tw, ttop, wins, col in s.towers:        # skyscraper bodies behind their zig-zag floors
             x, y = tx - cx, ttop + oy
             if -tw < x < W:
-                pg.draw.rect(scr, (15, 7, 28), (x, y, tw, gys - y))
-                pg.draw.line(scr, (80, 40, 110), (x, y), (x, gys))
-                pg.draw.line(scr, (80, 40, 110), (x + tw - 1, y), (x + tw - 1, gys))
-                pg.draw.line(scr, col, (x, y), (x + tw, y))
-                for wx, wy, wc in wins:
-                    scr.fill(wc, (x + wx, y + wy, 3, 4))
-        for sx0, sx1, stop in s.scaffolds:              # scaffolding poles and cross braces
-            for px in range(int(sx0), int(sx1) + 1, 29):
-                x = px - cx
-                if -10 < x < W + 10:
-                    pg.draw.line(scr, (52, 40, 70), (x, stop + oy), (x, gys), 2)
-                    for py in range(int(stop), GY, 27):
-                        pg.draw.line(scr, (34, 26, 48), (x, py + oy), (x + 29, py + 27 + oy))
+                scr.blit(opt_tower(tx, tw, ttop, wins, col), (math.floor(tx) - cx, math.floor(ttop) + oy - 2))
+        for sx0, sx1, stop in s.scaffolds:              # scaffolding poles and cross braces (a cached sprite, clipped to the visible poles)
+            i0 = int(sx0)
+            ka = max(0, (cx - 10 - i0) // 29 + 1)
+            kb = min((int(sx1) - i0) // 29, (cx + W + 9 - i0) // 29)
+            if kb >= ka:
+                sp_ = opt_scaf(sx0, sx1, stop)
+                l_ = max(0, ka * 29 + 4 - 2)
+                r_ = min(sp_.get_width(), kb * 29 + 4 + 29 + 3)
+                scr.blit(sp_, (i0 - 4 - cx + l_, int(stop) - 4 + oy), (l_, 0, r_ - l_, sp_.get_height()))
         for p in s.plats[1:]:                           # building facades below the low rooftops
             if p.win:
                 x, y = p.x - cx, p.y + oy
                 if -p.w < x < W:
-                    pg.draw.rect(scr, (17, 8, 30), (x + 3, y + 8, p.w - 6, gys - y - 8))
-                    pg.draw.line(scr, (70, 36, 100), (x + 3, y + 8), (x + 3, gys))
-                    pg.draw.line(scr, (70, 36, 100), (x + p.w - 4, y + 8), (x + p.w - 4, gys))
-                    for wx, wy, col in p.win:
-                        scr.fill(tuple(c // 2 for c in col), (x + wx, y + wy, 4, 4))
+                    scr.blit(opt_facade(p), (math.floor(p.x) - cx, math.floor(p.y) + oy - 2))
         s.draw_door(s.door, cx, oy)
         if not s.arena:
             s.draw_torii(END_X - cx, oy)
@@ -8496,11 +8934,7 @@ class Game:
         s.reflect(gys)
         if s.arena and gys < H:                         # the arena floor: old stone slabs / iron / wet concrete / tatami
             acc = ARENAS[s.boss_kind][4]
-            for gx in range(-60, W + 60, 40):
-                wx = gx - (cx % 40)
-                pg.draw.line(scr, tuple(c // 8 for c in acc), (wx, gys + 1), (W / 2 + (wx - W / 2) * 1.6, gys + FLOOR))
-            for yy in (8, 20, 38):
-                pg.draw.line(scr, tuple(c // 10 for c in acc), (0, gys + yy), (W, gys + yy))
+            scr.blit(opt_grid(cx % 40, 40, 1.6, tuple(c // 8 for c in acc), tuple(c // 10 for c in acc), (8, 20, 38)), (0, gys))
             pg.draw.line(scr, tuple(c * 3 // 5 for c in acc), (0, gys), (W, gys))
             s.draw_arena_haz(cx, oy)
         elif gys < H:
@@ -8508,11 +8942,7 @@ class Game:
                 x = lx - cx
                 if -60 < x < W + 60:
                     glow(scr, x + 12, gys + 6, 50, (60, 40, 20), .22)
-            for gx in range(-60, W + 60, 30):          # 2.5D perspective grid on the street
-                wx = gx - (cx % 30)
-                pg.draw.line(scr, (22, 10, 34), (wx, gys + 1), (W / 2 + (wx - W / 2) * 1.8, gys + FLOOR))
-            for yy in (6, 14, 26, 42):
-                pg.draw.line(scr, (18, 8, 28), (0, gys + yy), (W, gys + yy))
+            scr.blit(opt_grid(cx % 30, 30, 1.8, (22, 10, 34), (18, 8, 28), (6, 14, 26, 42)), (0, gys))   # 2.5D perspective grid
             pg.draw.line(scr, s.theme.get('street', (255, 60, 160)), (0, gys), (W, gys))
             glow(scr, W / 2, gys + 1, 240, (30, 8, 26), .03)
         if s.hole:
@@ -8554,7 +8984,7 @@ class Game:
             scr.blit(s.black, (0, 0))
             s.black.fill((0, 0, 0))
         if overlay and s.settings['crt']:
-            scr.blit(s.L['over'], (0, 0))
+            scr.blit(opt_over(s.L), (0, 0), special_flags=pg.BLEND_RGB_MULT)
 
     # ---------- anime camera
     def camera(s):
@@ -8620,7 +9050,7 @@ class Game:
         pg.draw.polygon(scr, RED, [(W - 118, 4), (W - 108, 4), (W - 114, 28), (W - 124, 28)])
         glow(scr, W - 96, 15, 10 + int(pop * 6), (60, 45, 10))
         pg.draw.ellipse(scr, (255, 205, 50), (W - 100, 11, 8, 8))
-        img = F_PM.render(str(s.score), False, (255, 230, 120) if pop > 0 else WHITE)
+        img = rtext(F_PM, str(s.score), (255, 230, 120) if pop > 0 else WHITE)
         if pop > 0:
             img = pg.transform.scale_by(img, 1 + pop * .3)
         scr.blit(img, (W - 86, 15 - img.get_height() // 2))
@@ -8682,7 +9112,7 @@ class Game:
                 pg.draw.polygon(scr, WHITE, jag)
                 pg.draw.polygon(scr, WHITE, [(r.right + 12, r.centery - 2), (r.right + 34, r.centery - 10 + j), (r.right + 16, r.centery + 5)])
                 pg.draw.polygon(scr, INK, [(r.left - 18, r.centery + 2), (r.left - 6, r.centery - 6), (r.left - 4, r.centery + 6)])
-                img = pg.transform.rotate(pg.transform.scale_by(font.render(tr(lab), False, INK), pop), -4)
+                img = pg.transform.rotate(pg.transform.scale_by(rtext(font, tr(lab), INK), pop), -4)
                 scr.blit(img, (r.centerx - img.get_width() // 2, r.centery - img.get_height() // 2))
             else:
                 outlined(lab, font, WHITE, x, y - 1)
@@ -8765,7 +9195,7 @@ class Game:
         pg.draw.polygon(scr, INK, [(x, y), (x + w, y - 2), (x + w - 6, y + 15), (x - 6, y + 17)])
         pg.draw.polygon(scr, accent, [(x, y), (x + 5, y), (x - 1, y + 17), (x - 6, y + 17)])
         text(label, F_S, WHITE, x + 8, y + 3)
-        img = F_PS.render(val, False, INK)
+        img = rtext(F_PS, val, INK)
         tw = img.get_width() + 12
         pg.draw.polygon(scr, WHITE, [(x + w - tw - 4, y - 1), (x + w + 2, y - 3), (x + w - 3, y + 16), (x + w - tw - 9, y + 18)])
         scr.blit(img, (x + w - tw + 1, y))
@@ -8785,7 +9215,7 @@ class Game:
             star(30 + sl, 240, 10, s.t, INK)
             star(268, 22, 7, -s.t * 1.3, WHITE)
         if s.settings['crt']:
-            scr.blit(s.L['over'], (0, 0))
+            scr.blit(opt_over(s.L), (0, 0), special_flags=pg.BLEND_RGB_MULT)
 
     def quit(s):
         if s.state in ('play', 'pause'):
@@ -8877,10 +9307,10 @@ class Game:
             img = s.portrait(pose_enemy(e, s.t + j), 1, chains={'_': None}, crop=(23, 36, 50, 50), S=S)
             card.blit(img, (cw // 2 - img.get_width() // 2, ch - 12 - img.get_height()))
             pg.draw.rect(card, WHITE, (3, ch - 12, cw - 6, 10))
-            name = F_S.render(tr(KIND_NAMES.get(kind, kind.upper())), False, INK)
+            name = rtext(F_S, tr(KIND_NAMES.get(kind, kind.upper())), INK)
             card.blit(name, (cw // 2 - name.get_width() // 2, ch - 13), pg.Rect(0, 0, cw - 8, 12))
         else:
-            q = F_PM.render("?", False, (90, 80, 100))
+            q = rtext(F_PM, "?", (90, 80, 100))
             card.blit(q, (cw // 2 - q.get_width() // 2, 18))
         pg.draw.polygon(card, WHITE, [(1, 2), (cw - 1, 1), (cw - 2, ch - 1), (2, ch - 1)], 1)
         return card
@@ -9103,9 +9533,9 @@ class Game:
                     pg.draw.polygon(scr, RED, [(a_ + 3, b_ + 2) for a_, b_ in pts])
                 locked = m_ == 1 and i not in s.stats.get('cleared', []) and not lk   # infinite: after a standard run here
                 pg.draw.polygon(scr, (150, 144, 156) if locked else (WHITE if hot else (210, 206, 214)), pts)
-                img = F_PS.render(tr(lab), False, INK)
+                img = rtext(F_PS, tr(lab), INK)
                 if img.get_width() > 92:
-                    img = F_S.render(tr(lab), False, INK)
+                    img = rtext(F_S, tr(lab), INK)
                 scr.blit(img, (bx.centerx - img.get_width() // 2, bx.centery - img.get_height() // 2))
                 if locked:                                      # a chain across the infinite run
                     chain(scr, (bx.x - 2, bx.centery + 2), (bx.right + 2, bx.centery - 2))
@@ -9137,7 +9567,7 @@ class Game:
         outlined(jp, F_JP, acc, rx + 4, 50, r=1)
         s.enemy_deck(i, rx, kk)
         for j, word in enumerate((tr(line).rsplit(' ', 1) if ' ' in tr(line) else [tr(line)])):   # the line, on two black tags
-            img = F_PS.render(word, False, WHITE)
+            img = rtext(F_PS, word, WHITE)
             tx, ty = min(rx + 4 + j * 20, W - 18 - img.get_width()), 210 + j * 18
             pg.draw.polygon(scr, INK, [(tx - 6, ty - 2), (tx + img.get_width() + 6, ty - 4), (tx + img.get_width() + 3, ty + 18), (tx - 9, ty + 19)])
             scr.blit(img, (tx, ty))
@@ -9162,7 +9592,7 @@ class Game:
         ransom("NEON", 22, 34, [F_PB, F_P], 7, s.t, tilt=-7)
         ransom("RONIN", 70, 76, [F_PB, F_P], 19, s.t, tilt=-7)
         pg.draw.polygon(scr, INK, [(150, 96), (236, 92), (232, 110), (146, 113)])
-        scr.blit(F_JPB.render("ネオン浪人", False, WHITE), (156, 93))
+        scr.blit(rtext(F_JPB, "ネオン浪人", WHITE), (156, 93))
         s.p_items([("START", lambda: s.go('locsel', 0)), ("STATS", lambda: s.go('stats', 0)),
                    ("SETTINGS", lambda: s.go('settings', 0)), ("QUIT", s.quit)], 36, 124, dx=14, dy=31)
         ok = ANDROID or os.path.exists(os.path.join(ASSETS, 'level.mp3'))
@@ -9172,7 +9602,8 @@ class Game:
     SETTING_ROWS = [('SOUND', 'MASTER VOLUME', 'master', 'slider'), ('', 'MUSIC', 'music', 'slider'),
                     ('', 'EFFECTS', 'sfx', 'slider'), ('VIDEO', 'FULLSCREEN', 'fullscreen', 'toggle'),
                     ('', 'SCREEN SHAKE', 'shake', 'toggle'), ('', 'RAIN', 'rain', 'rain'),
-                    ('', 'CRT FILTER', 'crt', 'toggle'), ('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'),
+                    ('', 'CRT FILTER', 'crt', 'toggle'), ('', 'GRAPHICS', 'gfx', 'gfx'),
+                    ('', 'FPS LIMIT', 'fps_lock', 'fps'), ('', 'SHOW FPS', 'show_fps', 'toggle'), ('INPUT', 'GAMEPAD VIBRATION', 'rumble', 'toggle'),
                     ('', 'CONTROLS', None, 'open'), ('GAME', 'LANGUAGE', 'lang', 'lang'), ('', 'DIFFICULTY', 'diff', 'diff'),
                     ('', 'IMMORTALITY', 'god', 'toggle'), ('', 'ADMIN', 'admin', 'toggle')]   # (testing)
     SET_CATS = (('SOUND', "音", "Music and blade volume"), ('VIDEO', "映", "Screen, rain, CRT glow"),
@@ -9206,14 +9637,14 @@ class Game:
         if on:
             pg.draw.polygon(scr, RED, [(a + 4, b + 3) for a, b in pts])
         pg.draw.polygon(scr, WHITE if on else INK, pts)
-        img = F_PS.render(tr("< BACK"), False, INK if on else WHITE)
+        img = rtext(F_PS, tr("< BACK"), INK if on else WHITE)
         scr.blit(img, (r.centerx - img.get_width() // 2, r.y + 2))
         return hov and s.click
 
     def row_text(s, txt, selected, x, y):
         txt = tr(txt)
         if selected:                                    # black on the white highlight
-            scr.blit(F_S.render(txt, False, INK), (x, y))
+            scr.blit(rtext(F_S, txt, INK), (x, y))
         else:
             text(txt, F_S, WHITE, x, y)
 
@@ -9233,6 +9664,14 @@ class Game:
             st[key] = (st[key] + (delta or 1)) % len(RAIN_LEVELS)
         elif kind == 'diff':
             st[key] = (st.get(key, 2) + (delta or 1)) % len(DIFFS)
+        elif kind == 'fps':
+            st[key] = (st.get(key, 2) + (delta or 1)) % len(FPS_LOCKS)
+        elif kind == 'gfx':                                     # a preset: LOW / MEDIUM also tone the rain and CRT down
+            st[key] = (st.get(key, 2) + (delta or 1)) % len(GFX_LEVELS)
+            if st[key] == 0:
+                st['rain'], st['crt'] = 0, False
+            elif st[key] == 1:
+                st['rain'], st['crt'] = min(st['rain'], 1), False
         elif kind == 'cycle':
             st[key] = (st.get(key, 0) + (delta or 1)) % len(ADMIN_CYCLE[key])
         elif kind == 'action' and key == 'touchedit':           # move / resize the on-screen controls
@@ -9462,9 +9901,9 @@ class Game:
             else:
                 pg.draw.polygon(scr, INK, box)
                 pg.draw.polygon(scr, (90, 70, 110), box, 1)
-            jimg = pg.transform.scale_by(F_JPB.render(jp, False, RED if on else (120, 30, 50)), 1.6)
+            jimg = pg.transform.scale_by(rtext(F_JPB, jp, RED if on else (120, 30, 50)), 1.6)
             scr.blit(jimg, (x + w - 50, y + h // 2 - jimg.get_height() // 2))
-            img = F_P.render(tr(name), False, INK if on else WHITE)
+            img = rtext(F_P, tr(name), INK if on else WHITE)
             img = pg.transform.rotate(pg.transform.scale_by(img, pop), -3)
             scr.blit(img, (x + 10, y + h // 2 - img.get_height() // 2 - 2))
             if on:
@@ -9503,6 +9942,11 @@ class Game:
             return "РУССКИЙ" if LANG == 'ru' else "ENGLISH"
         if kind == 'rain':
             return tr(RAIN_LEVELS[s.settings[key]][0])
+        if kind == 'fps':
+            return tr(FPS_LOCKS[s.settings.get(key, 2)][0])
+        if kind == 'gfx':
+            nm = GFX_LEVELS[s.settings.get(key, 2)][0]
+            return GFX_RU[nm] if LANG == 'ru' else nm
         if kind == 'diff':
             return tr(DIFFS[s.settings.get(key, 2)][0])
         if kind == 'toggle':
@@ -9521,7 +9965,7 @@ class Game:
         if el < .35:
             pg.draw.polygon(scr, RED, [(W - slash - 60, 0), (W - slash + 40, 0), (W - slash - 120, H), (W - slash - 220, H)])
         ransom(name, 120, 14, [F_PB, F_P], 41 + s.set_cat, s.t, tilt=-6)
-        jimg = pg.transform.scale_by(F_JPB.render(jp, False, (120, 20, 40)), 4)
+        jimg = pg.transform.scale_by(rtext(F_JPB, jp, (120, 20, 40)), 4)
         jimg.set_alpha(110)
         scr.blit(jimg, (W - jimg.get_width() - 10, H - jimg.get_height() - 4))
         rows = s.cat_rows(s.set_cat)
@@ -9530,7 +9974,7 @@ class Game:
         s.nav(n)
         row = rows[s.sel]
         if 'left' in s.act or 'right' in s.act:
-            if row[3] in ('slider', 'toggle', 'rain', 'lang', 'cycle', 'diff'):
+            if row[3] in ('slider', 'toggle', 'rain', 'lang', 'cycle', 'diff', 'fps', 'gfx'):
                 s.change_setting(row, 1 if 'right' in s.act else -1)
         compact = n > 6                                          # the admin list open: smaller rows
         dy, rh, fnt = ((11 if n > 17 else (12 if n > 15 else (14 if n > 13 else 15))), (10 if n > 17 else 11 if n > 15 else (12 if n > 13 else 13)), F_S) if compact else (30, 19, F_PS)
@@ -9558,7 +10002,7 @@ class Game:
             else:
                 pg.draw.polygon(scr, (40, 8, 20) if sub else INK, bar)
             ink = INK if on else WHITE
-            img = fnt.render(tr(lab), False, ink)
+            img = rtext(fnt, tr(lab), ink)
             scr.blit(img, (x + 10, y + (0 if compact else 1)))
             if kind == 'slider':                                 # [-] ########## [+]  70%
                 v = s.settings[key]
@@ -9581,11 +10025,11 @@ class Game:
                     if s.click and cell.inflate(2, 8).collidepoint(mx, my):   # click a cell: exactly that level
                         s.sel = i
                         s.change_setting(rows[i], 0, (b_ + 1) / 10)
-                img = F_PS.render(f"{int(round(v * 100))}%", False, ink)
+                img = rtext(F_PS, f"{int(round(v * 100))}%", ink)
                 scr.blit(img, (plus.right + 6, y + 1))
             else:
                 val = s.setting_value((sec, lab, key, kind))
-                img = fnt.render(val, False, WHITE)
+                img = rtext(fnt, val, WHITE)
                 tw = img.get_width() + 14
                 tx = vx + 70 - tw // 2
                 lit = kind in ('rain', 'lang', 'open', 'action') or s.settings.get(key)
@@ -9598,7 +10042,7 @@ class Game:
                         hov = btn.collidepoint(mx, my)
                         if hov:
                             pg.draw.rect(scr, RED, btn)
-                        scr.blit(fnt.render(ch, False, WHITE if hov else (INK if on else (150, 140, 170))), (btn.x + 3, y + (0 if compact else 1)))
+                        scr.blit(rtext(fnt, ch, WHITE if hov else (INK if on else (150, 140, 170))), (btn.x + 3, y + (0 if compact else 1)))
                 if s.click and r.collidepoint(mx, my) and (not TOUCH or on):
                     s.sel = i
                     s.change_setting(rows[i], -1 if arrows and lb.collidepoint(mx, my) else 1)
@@ -9656,7 +10100,7 @@ class Game:
                     pg.draw.rect(scr, WHITE, cell)
                     if s.capture and int(s.t * 4) % 2:
                         txt = "PRESS..."
-                    scr.blit(F_S.render(txt, False, INK), (cx_, y + 1))
+                    scr.blit(rtext(F_S, txt, INK), (cx_, y + 1))
                 else:
                     text(txt, F_S, (255, 230, 150) if c == 0 else (150, 240, 255), cx_, y + 1)
         if not s.capture and 'ok' in s.act:
@@ -9706,7 +10150,7 @@ class Game:
         pg.draw.polygon(scr, INK, [(x, y), (x + w, y - 1), (x + w - 4, y + 12), (x - 4, y + 13)])
         scr.fill(accent, (x, y + 1, 3, 11))
         text(label, F_S, WHITE, x + 7, y + 1)
-        img = F_S.render(val, False, INK)
+        img = rtext(F_S, val, INK)
         tw = img.get_width() + 10
         pg.draw.polygon(scr, WHITE, [(x + w - tw, y), (x + w + 1, y - 1), (x + w - 3, y + 12), (x + w - tw - 4, y + 13)])
         scr.blit(img, (x + w - tw + 3, y + 1))
@@ -9717,7 +10161,7 @@ class Game:
         pg.draw.polygon(scr, INK, [(x, y), (x + w, y - 2), (x + w - 4, y + 18), (x - 4, y + 20)])
         pg.draw.ellipse(scr, (255, 205, 50), (x + 6, y + 5, 9, 9))
         glow(scr, x + 10, y + 9, 10, (60, 45, 10))
-        scr.blit(F_PS.render(txt, False, WHITE), (x + 20, y))
+        scr.blit(rtext(F_PS, txt, WHITE), (x + 20, y))
 
     def st_stats(s, dt):
         s.persona_bg()
@@ -9745,7 +10189,7 @@ class Game:
         pg.draw.polygon(scr, INK, plate)
         pg.draw.polygon(scr, WHITE if not s.typing else (255, 230, 120), plate, 2)
         name = (s.name_buf + ("_" if int(s.t * 3) % 2 else " ")) if s.typing else (tr(st['name']) if st['name'] == PROFILE_DEFAULTS['name'] else st['name'])
-        img = F_PM.render(name, False, WHITE)
+        img = rtext(F_PM, name, WHITE)
         scr.blit(img, (97 + cut - img.get_width() // 2, 204))
         pg.draw.line(scr, WHITE, (206, 40), (198, 250), 3)        # divider
         for i, (lab, key) in enumerate(STAT_ROWS):
@@ -9759,7 +10203,7 @@ class Game:
         for i, (lab, r) in enumerate(btns, 1):
             on = s.sel == i
             pg.draw.polygon(scr, WHITE if on else INK, [(r.x, r.y), (r.right, r.y - 2), (r.right - 4, r.bottom), (r.x - 4, r.bottom + 2)])
-            img = F_PS.render(tr(lab), False, INK if on else WHITE)
+            img = rtext(F_PS, tr(lab), INK if on else WHITE)
             scr.blit(img, (r.centerx - img.get_width() // 2, r.y + 1))
             if s.moved and r.collidepoint(mx, my) and not s.typing:
                 s.sel = i
@@ -9874,7 +10318,7 @@ class Game:
                 pg.draw.line(scr, WHITE, a_, b_, 2)
         if th > 5:                                               # the skin's name engraved on the blade
             f = F_PS if th > 14 else F_S
-            img = f.render(tr(SKINS[sid][0]), False, (40, 30, 50) if owned else (70, 70, 80))
+            img = rtext(f, tr(SKINS[sid][0]), (40, 30, 50) if owned else (70, 70, 80))
             ang = -math.degrees(math.atan2(uy, ux)) + 180
             img = pg.transform.rotate(img, ang)
             mx_, my_ = px + ux * L * .42, py + uy * L * .42
@@ -9946,7 +10390,7 @@ class Game:
         mx, my = pg.mouse.get_pos()
         ransom("UPGRADES", 100, 22, [F_P, F_PM], 23, s.t, tilt=-6)
         acc = SKINS[sk][2]['hilt']                                  # whose upgrades: on a tilted tag
-        img = F_PS.render(tr(SKINS[sk][0]), False, INK)
+        img = rtext(F_PS, tr(SKINS[sk][0]), INK)
         tx, ty = W - 16 - img.get_width(), 27                         # (under the wallet, clear of the title)
         pg.draw.polygon(scr, acc, [(tx - 6, ty - 2), (tx + img.get_width() + 8, ty - 4),
                                    (tx + img.get_width() + 4, ty + 15), (tx - 9, ty + 17)])
@@ -9961,7 +10405,7 @@ class Game:
         if cap < 5:                                              # what opens the next levels
             need = {0: "CLEAR NEON SHINJUKU TO UNLOCK UPGRADES", 3: "CLEAR ANOTHER LOCATION FOR LEVEL 4",
                     4: "CLEAR ANOTHER LOCATION FOR LEVEL 5"}[cap]
-            img = F_S.render(tr(need), False, (255, 200, 120))
+            img = rtext(F_S, tr(need), (255, 200, 120))
             scr.blit(img, (W - 14 - img.get_width(), 46 - 12))
         if s.corner_back(mx, my) or s.act & {'back', 'left'}:
             sfx('sel')
@@ -9986,10 +10430,10 @@ class Game:
                 pg.draw.polygon(scr, RED, [(px + 6, py + 5) for px, py in box])
             pg.draw.polygon(scr, WHITE if on else INK, box)
             ink = INK if on else WHITE
-            jimg = pg.transform.scale_by(F_JPB.render(jp, False, RED if on else (140, 30, 50)), 1.4)
+            jimg = pg.transform.scale_by(rtext(F_JPB, jp, RED if on else (140, 30, 50)), 1.4)
             scr.blit(jimg, (x + 4, y + 15 - jimg.get_height() // 2))
-            scr.blit(F_PS.render(tr(name), False, ink), (x + 34, y + 1))
-            scr.blit(F_S.render(tr(desc), False, (90, 30, 50) if on else (190, 180, 210)), (x + 34, y + 17))
+            scr.blit(rtext(F_PS, tr(name), ink), (x + 34, y + 1))
+            scr.blit(rtext(F_S, tr(desc), (90, 30, 50) if on else (190, 180, 210)), (x + 34, y + 17))
             top = len(prices)
             cap = s.level_cap(k, top)
             for j in range(top):                                 # level pips (dark with a bar = still locked)
@@ -10007,7 +10451,7 @@ class Game:
             else:
                 price = prices[lvl]
                 tag, col = f"{price}", (255, 205, 50) if s.can_pay(price) else (110, 90, 110)
-            img = F_PS.render(tag, False, INK)
+            img = rtext(F_PS, tag, INK)
             tx = x + w - 62
             pg.draw.polygon(scr, col, [(tx, y + 6), (tx + 50, y + 4), (tx + 47, y + 22), (tx - 3, y + 24)])
             scr.blit(img, (tx + 25 - img.get_width() // 2, y + 6))
@@ -10037,7 +10481,7 @@ class Game:
         pg.draw.polygon(scr, INK, plate)
         pg.draw.polygon(scr, WHITE, plate, 2)
         name = tr(SKINS[sid][0])                                 # the name on a white tag, tilted
-        img = F_PS.render(name, False, INK)
+        img = rtext(F_PS, name, INK)
         tag = [(x0 - 6, 156), (x0 + img.get_width() + 10, 152), (x0 + img.get_width() + 6, 170), (x0 - 10, 173)]
         pg.draw.polygon(scr, WHITE, tag)
         scr.blit(pg.transform.rotate(img, 2), (x0 + 1, 154))
@@ -10054,7 +10498,7 @@ class Game:
         st_txt = (tr("EQUIPPED") if st['skin'] == sid else (tr("OWNED - EQUIP") if sid in st['skins'] else f"{SKINS[sid][1]} {tr('COINS')}"))
         col = RED if st['skin'] == sid else ((0, 200, 230) if sid in st['skins'] else
                                              ((255, 205, 50) if s.can_pay(SKINS[sid][1]) else (90, 80, 100)))
-        img = F_PS.render(st_txt, False, INK if col != RED else WHITE)
+        img = rtext(F_PS, st_txt, INK if col != RED else WHITE)
         tx, ty = W - img.get_width() - 22, H - 22
         pg.draw.polygon(scr, col, [(tx - 6, ty), (tx + img.get_width() + 8, ty - 2), (tx + img.get_width() + 4, ty + 16), (tx - 10, ty + 18)])
         scr.blit(img, (tx, ty))
@@ -10079,9 +10523,9 @@ class Game:
             pg.draw.rect(surf, (176, 30, 40), (w + 3, 7, 3, h))
             inner = surf.subsurface(paper)
             yy = 8
-            img = F_PS.render(tr(name), False, INK)
+            img = rtext(F_PS, tr(name), INK)
             if img.get_width() > w - 10:
-                img = F_S.render(tr(name), False, INK)
+                img = rtext(F_S, tr(name), INK)
             inner.blit(img, (w // 2 - img.get_width() // 2, yy))
             yy += img.get_height() + 2
             pg.draw.line(inner, (176, 30, 40), (10, yy), (w - 10, yy))
@@ -10089,10 +10533,10 @@ class Game:
             key = s.bind_name('pad' if s.last_input == 'pad' else 'kb', 'skill')
             for j, para in enumerate(SKIN_DESC.get(sid, [])):   # what the skin gives: perk, then skill
                 for line in wrap(tr(para).replace('{K}', key), F_S, w - 14):
-                    inner.blit(F_S.render(line, False, (150, 20, 40) if j == 0 else (40, 60, 140)), (8, yy))
+                    inner.blit(rtext(F_S, line, (150, 20, 40) if j == 0 else (40, 60, 140)), (8, yy))
                     yy += 10
                 yy += 3
-            jp = F_JPB.render("巻", False, (220, 200, 180))
+            jp = rtext(F_JPB, "巻", (220, 200, 180))
             inner.blit(jp, (w - jp.get_width() - 6, h - jp.get_height() - 4 if h > 40 else 999))
         pg.draw.rect(surf, (90, 40, 30), (0, 7 + h, w + 12, 8))                   # the rolled part / bottom rod
         pg.draw.rect(surf, (238, 228, 206), (3, 8 + h, w + 6, 5))
@@ -10104,7 +10548,7 @@ class Game:
                 tx = 12 + j * 56
                 sway = math.sin(s.t * 2 + j) * 2
                 pg.draw.line(surf, (176, 30, 40), (tx + 20, 15 + h), (tx + 20 + sway, 22 + h))
-                img = F_S.render(tg, False, WHITE)
+                img = rtext(F_S, tg, WHITE)
                 tw = min(54, img.get_width() + 6)
                 pg.draw.rect(surf, INK, (tx + 20 + sway - tw // 2, 22 + h, tw, 12))
                 surf.blit(img, (tx + 20 + sway - tw // 2 + 3, 23 + h), pg.Rect(0, 0, tw - 6, 12))
@@ -10228,7 +10672,7 @@ class Game:
         s.wallet_tag(W - 110, 8)
         pts = [(ub.x, ub.y), (ub.right, ub.y - 2), (ub.right - 4, ub.bottom), (ub.x - 4, ub.bottom + 2)]
         pg.draw.polygon(scr, WHITE if hov else INK, pts)
-        img = F_PS.render(tr("UPGRADES >"), False, INK if hov else WHITE)
+        img = rtext(F_PS, tr("UPGRADES >"), INK if hov else WHITE)
         scr.blit(img, (ub.centerx - img.get_width() // 2, ub.y + 1))
         if fire:
             price = SKINS[sid][1]
@@ -10286,7 +10730,7 @@ class Game:
         z = max(z, 1 + abs(tilt) * .025)                             # zoom a little more so a tilt never shows edges
         cw, ch = W / z, H / z
         rx, ry = max(0, min(W - cw, fx - cw / 2)), max(0, min(H - ch, fy - ch * .55))
-        img = pg.transform.scale(scr.subsurface((rx, ry, cw, ch)).copy(), (W, H))
+        img = pg.transform.scale(scr.subsurface((rx, ry, cw, ch)), (W, H))
         if abs(tilt) >= .3:
             img = pg.transform.rotate(img, tilt)
         scr.blit(img, img.get_rect(center=(W // 2, H // 2)))
@@ -10349,8 +10793,9 @@ class Game:
         if s.cine_phase == 'dialog' and s.dialog_box(dt):
             s.cine_phase, s.cine_out = 'out', 0.0
         if s.cine_phase != 'out':
-            outlined(tr("ESC skip"), F_S, WHITE, W - 6 - F_S.size(tr("ESC skip"))[0], 8 + bh, r=1)
-            if s.act & {'back', 'pause'}:
+            skip_txt = tr("TAP TO SKIP" if TOUCH else "ESC skip")
+            outlined(skip_txt, F_S, WHITE, W - 6 - F_S.size(skip_txt)[0], 8 + bh, r=1)
+            if s.act & {'back', 'pause'} or (TOUCH and s.click):
                 s.cine_phase, s.cine_out = 'out', 0.0
 
     def normal_card(s, used=()):
@@ -10482,10 +10927,10 @@ class Game:
         pg.draw.circle(scr, (20, 12, 26), (cx_, cy), r_)
         pg.draw.circle(scr, GOLD, (cx_, cy), r_, 2)
         pg.draw.circle(scr, GOLD_D, (cx_, cy), r_ - 4, 1)
-        img = (F_PB if r_ >= 18 else F_PM).render("?", False, (255, 222, 140))
+        img = rtext((F_PB if r_ >= 18 else F_PM), "?", (255, 222, 140))
         scr.blit(img, (cx_ - img.get_width() // 2, cy - img.get_height() // 2 + 1))
         if title and w >= 60:
-            img = F_S.render(tr(title), False, GOLD)
+            img = rtext(F_S, tr(title), GOLD)
             if img.get_width() <= w - 14:
                 pg.draw.rect(scr, (12, 8, 18), (cx_ - img.get_width() // 2 - 3, y + h - 22, img.get_width() + 6, 11))
                 scr.blit(img, (cx_ - img.get_width() // 2, y + h - 22))
@@ -10511,12 +10956,12 @@ class Game:
         fill = (18, 12, 28) if dark else ((250, 228, 228) if b == 'key' else (244, 238, 224))
         trim = (214, 176, 92) if dark else tuple(int(c * .62) for c in col)   # (darker on the cream face)
         pg.draw.rect(scr, fill, rc, border_radius=rad)
-        edge_c = qcol(col, .75 + .25 * math.sin(s.t * 2.5)) if dark else INK      # each special its own colour, softly pulsing
+        edge_c = (col if _CBUILD[0] else qcol(col, .75 + .25 * math.sin(s.t * 2.5))) if dark else INK      # each special its own colour, softly pulsing
         pg.draw.rect(scr, edge_c, rc, 2 if dark else 1, border_radius=rad)
         if w < 50:                                                 # (mid-turn: just the card)
             return
         pg.draw.rect(scr, trim, rc.inflate(-8, -8), 1, border_radius=max(1, rad - 2))
-        if dark:
+        if dark and not _CBUILD[0]:
             for k_ in range(4):                                    # sparkles drifting up the card
                 sx_ = rc.x + 8 + (k_ * 37 + int(s.t * 20)) % (w - 16)
                 sy_ = y + h - 8 - (k_ * 23 + int(s.t * 30)) % (h - 16)
@@ -10535,11 +10980,11 @@ class Game:
         s.buff_icon(b, cx_, my_, col)
         tc, dc = ((255, 236, 190), (205, 195, 225)) if dark else (INK, (60, 48, 70))
         ty = my_ + 20
-        img = F_PS.render(tr(title), False, tc)
+        img = rtext(F_PS, tr(title), tc)
         if img.get_width() > w - 12:                                # long RU title: smaller font, two lines if need be
             tl = wrap(tr(title), F_S, w - 12)
             for j, line in enumerate(tl[:2]):
-                img = F_S.render(line, False, tc)
+                img = rtext(F_S, line, tc)
                 scr.blit(img, (cx_ - img.get_width() // 2, ty + 2 + j * 10))
             ty += 6 if len(tl) > 1 else 0
         else:
@@ -10548,13 +10993,42 @@ class Game:
             lines = wrap(tr(text_), F_S, w - 14)[:5]
             sp = 10 if len(lines) <= 4 else 9
             for j, line in enumerate(lines):
-                img = F_S.render(line, False, dc)
+                img = rtext(F_S, line, dc)
                 scr.blit(img, (cx_ - img.get_width() // 2, ty + 18 + j * sp))
 
     def card_img(s, b, w=96, h=134, back=False, desc=True):
         """The card drawn on its own transparent surface (4 px margin), with the effects that live on its face, so it can
-        be tilted, scaled and squashed."""
+        be tilted, scaled and squashed. The static face is cached; only the pulsing edge, sparkles and foil/effects are
+        drawn per frame."""
         global scr
+        if not back and b != 'random' and w >= 40:
+            key = (b, w, h, desc, LANG)
+            base = _CIMG.get(key)
+            if base is None:
+                base = pg.Surface((w + 8, h + 8), pg.SRCALPHA)
+                keep, scr = scr, base
+                _CBUILD[0] = True
+                try:
+                    s.draw_card(b, w // 2 + 4, 4, False, w=w, h=h, desc=desc, bare=True)
+                finally:
+                    _CBUILD[0] = False
+                    scr = keep
+                if len(_CIMG) >= 80:
+                    _CIMG.clear()
+                _CIMG[key] = base = base.convert_alpha()
+            surf = base.copy()
+            if b in SPECIALS:
+                col = card_info(b)[2]
+                rad = max(2, min(7, w // 6))
+                pg.draw.rect(surf, qcol(col, .75 + .25 * math.sin(s.t * 2.5)), pg.Rect(4, 4, w, h), 2, border_radius=rad)
+                if w >= 50:
+                    for k_ in range(4):
+                        sx_ = 4 + 8 + (k_ * 37 + int(s.t * 20)) % (w - 16)
+                        sy_ = 4 + h - 8 - (k_ * 23 + int(s.t * 30)) % (h - 16)
+                        surf.fill(hue(s.t * 120 + k_ * 90), (sx_, sy_, 1, 1))
+            if b in SPECIALS or b == 'back':
+                s.card_face_fx(b, surf, pg.Rect(4, 4, w, h))
+            return surf
         surf = pg.Surface((w + 8, h + 8), pg.SRCALPHA)
         keep, scr = scr, surf
         try:
@@ -10854,7 +11328,7 @@ class Game:
             pg.draw.polygon(scr, RED if hov else INK, [(rb.x, rb.y), (rb.right, rb.y - 2), (rb.right - 4, rb.bottom), (rb.x - 4, rb.bottom + 2)])
             pg.draw.polygon(scr, WHITE, [(rb.x, rb.y), (rb.right, rb.y - 2), (rb.right - 4, rb.bottom), (rb.x - 4, rb.bottom + 2)], 1)
             key = s.bind_name('pad' if s.last_input == 'pad' else 'kb', 'use')
-            img = F_PS.render(f"[{key}] " + tr("ROLL CARDS"), False, WHITE)
+            img = rtext(F_PS, f"[{key}] " + tr("ROLL CARDS"), WHITE)
             scr.blit(img, (rb.centerx - img.get_width() // 2, rb.y + 2))
             if 'use' in s.act or (hov and s.click):
                 fire = False
@@ -11195,7 +11669,7 @@ class Game:
     # ---------- loop
     def run(s):
         while True:
-            dt = min(clock.tick(60) / 1000, 1 / 30)
+            dt = min(clock.tick(FPS_LOCKS[s.settings.get('fps_lock', 2)][1]) / 1000, 1 / 20)
             s.t += dt
             s.dt = dt
             s.act, s.click, s.moved = set(), False, False
@@ -11218,6 +11692,9 @@ class Game:
             if getattr(s, 'minimized', False):                   # nothing runs (and nothing plays) while it's minimized
                 continue
             s.frame(dt)
+            if s.settings.get('show_fps'):                      # SHOW FPS
+                ftxt = f"{clock.get_fps():.0f} FPS"
+                outlined(ftxt, F_S, (120, 255, 160), W - 6 - F_S.size(ftxt)[0], 44, r=1)
             pg.display.flip()
 
     def frame(s, dt):
@@ -11228,7 +11705,7 @@ class Game:
         if s.state in MENU_STATES and el < .6 and s.state not in ('pause', 'kiosk', 'gift'):   # the camera settles onto the menu
             k = ease(min(1, el / .6))
             z, a = 1 + .22 * (1 - k), -5 * (1 - k)
-            img = pg.transform.rotozoom(scr.copy(), a, z)
+            img = pg.transform.rotozoom(scr, a, z)
             scr.blit(img, (W // 2 - img.get_width() // 2 + int((1 - k) * 30), H // 2 - img.get_height() // 2))
         if s.state in MENU_STATES and el < .5:   # Persona: a menu opens by shattering - black and red shards fly apart
             k = ease(min(1, el / .4))

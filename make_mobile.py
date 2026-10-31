@@ -30,24 +30,24 @@ rep("""SAVE_DIR = os.path.join(os.environ.get('APPDATA') or os.path.expanduser('
     """ANDROID = 'ANDROID_ARGUMENT' in os.environ or 'ANDROID_PRIVATE' in os.environ
 TOUCH = ANDROID or '--touch' in sys.argv          # on-screen touch controls (--touch: try them on PC with the mouse)
 SAVE_DIR = os.path.join(os.environ.get('ANDROID_PRIVATE') or os.environ.get('APPDATA') or os.path.expanduser('~'), 'NeonRonin')""")
-rep("""                    'a_kills': False, 'a_money': False, 'diff': 2}""",
-    """                    'a_kills': False, 'a_money': False, 'diff': 2,
+rep("""                    'a_kills': False, 'a_money': False, 'diff': 2, 'fps_lock': 2, 'gfx': 2, 'show_fps': False}""",
+    """                    'a_kills': False, 'a_money': False, 'diff': 2, 'fps_lock': 2, 'gfx': 2, 'show_fps': False,
                     'float_stick': True, 'touch_alpha': .8, 'tcal': None}   # tcal: touch calibration [ax, bx, ay, by]
 if ANDROID:                                          # phones: lighter rain, no CRT layer
     DEFAULT_SETTINGS.update(rain=0, crt=False)
 # on-screen controls: action -> [x, y, radius] in game pixels (480x270). The player can move/resize them in settings.
-DEFAULT_TOUCH = {'stick': [70, 200, 38], 'atk': [400, 218, 26], 'jump': [452, 170, 22], 'dash': [342, 240, 18],
-                 'parry': [396, 158, 17], 'skill': [454, 238, 15], 'super': [340, 184, 16], 'use': [288, 238, 14],
-                 'pause': [460, 60, 12]}
-TOUCH_V = 3                                          # bump when DEFAULT_TOUCH changes: old saved layouts are reset
+DEFAULT_TOUCH = {'stick': [70, 200, 38], 'atk': [404, 216, 26], 'jump': [456, 168, 22], 'dash': [350, 236, 22],
+                 'parry': [400, 156, 22], 'skill': [456, 236, 19], 'super': [346, 180, 19], 'use': [292, 240, 18],
+                 'pause': [458, 62, 17]}
+TOUCH_V = 5                                          # bump when DEFAULT_TOUCH changes: old saved layouts are reset
 TOUCH_LABELS = {'atk': "SLASH", 'jump': "JUMP", 'dash': "DASH", 'parry': "PARRY", 'skill': "SKILL",
                 'super': "SUPER", 'use': "USE", 'pause': "II", 'stick': ""}
 TOUCH_RU = {"SLASH": "УДАР", "JUMP": "ПРЫЖОК", "DASH": "РЫВОК", "PARRY": "БЛОК", "SKILL": "НАВЫК",
             "SUPER": "СУПЕР", "USE": "ИСП."}                 # short Russian names that fit on a round button""")
-rep("""scr = pg.display.set_mode((W, H), pg.SCALED | pg.RESIZABLE)""",
+rep("""SCREEN_FLAGS = pg.SCALED | pg.RESIZABLE""",
     """if not hasattr(pg.transform, 'scale_by'):           # Android's pygame is older than pygame-ce: no scale_by
     pg.transform.scale_by = lambda s_, k: pg.transform.scale(s_, (max(1, int(s_.get_width() * k)), max(1, int(s_.get_height() * k))))
-scr = pg.display.set_mode((W, H), pg.SCALED | (pg.FULLSCREEN if ANDROID else pg.RESIZABLE))""")
+SCREEN_FLAGS = pg.SCALED | (pg.FULLSCREEN if ANDROID else pg.RESIZABLE)""")
 rep("""pg.mixer.pre_init(""", """if ANDROID:                                          # phones report the accelerometer as a joystick: tilting
     os.environ['SDL_ACCELEROMETER_AS_JOYSTICK'] = '0'  # the phone would press buttons. Turn that off.
 pg.mixer.pre_init(""")
@@ -135,7 +135,7 @@ rep("""                for a in ('jump', 'crouch'):
                     dx, dy = f[0] - f[3], f[1] - f[4]
                     h['left'] |= dx < -sr * .25
                     h['right'] |= dx > sr * .25
-                    h['up'] |= dy < -sr * .55 and abs(dy) > abs(dx) * .7
+                    h['up'] |= dy < -sr * .65 and -dy > abs(dx) * 1.2
                     h['down'] |= dy > sr * .65 and dy > abs(dx) * 1.2     # strict: a drifting thumb isn't "down"
                 elif f[2] == 'jump':
                     h['jump'] = True
@@ -175,6 +175,9 @@ TOUCH_CODE = '''
             s.tedit_event(kind, fid, x, y)
             return
         s.last_input = 'touch'
+        if s.typing and kind == 'down':                           # typing the name: a tap finishes it
+            s.finish_name(True)
+            return
         if s.state != 'play':                                     # menus: a tap is the mouse moving there and clicking
             if kind == 'down':                                    # (menus pick on the first tap, open on the second)
                 s.ptr = (x, y)
@@ -185,9 +188,17 @@ TOUCH_CODE = '''
             s.fingers.pop(fid, None)
             return
         f = s.fingers.get(fid)
-        if kind == 'move':                                        # a finger keeps the control it first pressed
+        if kind == 'move' and f is None:                          # (a finger still down from before a pause or a screen:
+            kind = 'down'                                         #  it counts as pressed now)
+        if kind == 'move':                                        # a finger keeps the control it first pressed...
             if f is not None:
                 f[0], f[1] = x, y
+                if f[2] != 'stick':                               # ...unless it slides onto another button
+                    a = s.touch_button(x, y)
+                    if a and a != f[2]:
+                        f[2] = a
+                        s.act.add(a)
+                        s.atk_rep = .25
                 if f[2] == 'stick' and s.settings['float_stick']:  # the base trails the thumb: reversing is instant
                     sr = L['stick'][2]
                     d = math.hypot(x - f[3], y - f[4])
@@ -198,12 +209,12 @@ TOUCH_CODE = '''
         if a:
             s.fingers[fid] = [x, y, a]
             s.act.add(a)
-            s.atk_rep = .32
+            s.atk_rep = .25
         elif not any(g[2] == 'stick' for g in s.fingers.values()):
             sx, sy, sr = L['stick']
             if s.settings['float_stick']:
                 if x < W * .5:                                    # floating: left half, the stick appears under the thumb
-                    s.fingers[fid] = [x, y, 'stick', max(sr, x), max(sr + 20, min(H - sr * .6, y))]
+                    s.fingers[fid] = [x, y, 'stick', x, y]
             elif math.hypot(x - sx, y - sy) < sr * 1.6:          # fixed: only around its own spot
                 s.fingers[fid] = [x, y, 'stick', sx, sy]
 
@@ -219,7 +230,7 @@ TOUCH_CODE = '''
             s.atk_rep -= dt
             if s.atk_rep <= 0:
                 s.act.add('atk')
-                s.atk_rep = .2
+                s.atk_rep = .17
 
     @staticmethod
     def touch_sprite(kind, r, label, state):
@@ -233,9 +244,9 @@ TOUCH_CODE = '''
             if kind == 'knob':
                 pg.draw.circle(img, (255, 255, 255, 130 if state else 70), c, r)
             else:
-                fill = {'on': (215, 20, 40, 160), 'dim': (20, 10, 30, 40), 'off': (20, 10, 30, 80)}[state]
+                fill = {'on': (215, 20, 40, 170), 'dim': (20, 10, 30, 60), 'off': (20, 10, 30, 120)}[state]
                 pg.draw.circle(img, fill, c, r)
-                pg.draw.circle(img, (255, 255, 255, 60 if state == 'dim' else 150), c, r, 2)
+                pg.draw.circle(img, (255, 255, 255, 80 if state == 'dim' else 200), c, r, 2)
                 if label:
                     t = F_S.render(TOUCH_RU.get(label, label) if LANG == 'ru' else label, True, WHITE)
                     if t.get_width() > r * 2 - 2:
@@ -352,6 +363,8 @@ TOUCH_CODE = '''
         s.go('tcal', 0)
 
     def tcal_tap(s, nx, ny):
+        if len(s.tcal_raw) >= 2 or s.wipe_fn is not None:        # (already measured: stray taps change nothing)
+            return
         s.tcal_raw.append((nx, ny))
         sfx('sel')
         if len(s.tcal_raw) < 2:
@@ -389,7 +402,7 @@ TOUCH_CODE = '''
 '''
 rep("""    def bind_name(s, kind, a):
         if kind == 'kb':""", TOUCH_CODE + """    def bind_name(s, kind, a):
-        if TOUCH and s.last_input == 'touch':                    # phones: the on-screen button's name
+        if TOUCH:                                                # phones: the on-screen button's name
             lab = TOUCH_LABELS.get(a, a.upper())
             return TOUCH_RU.get(lab, lab) if LANG == 'ru' else lab
         if kind == 'kb':""")
@@ -500,13 +513,24 @@ import datetime
 rep('VERSION = "v3: 10 districts, bosses, Russian"',
     f'VERSION = "agents version - Android {datetime.date.today():%Y-%m-%d}"')
 
+# the intro: "tap to skip" on phones, and a tap skips it
+rep("""            outlined(tr("ESC skip"), F_S, WHITE, W - 6 - F_S.size(tr("ESC skip"))[0], 8 + bh, r=1)
+            if s.act & {'back', 'pause'}:""",
+    """            skip_txt = tr("TAP TO SKIP" if TOUCH else "ESC skip")
+            outlined(skip_txt, F_S, WHITE, W - 6 - F_S.size(skip_txt)[0], 8 + bh, r=1)
+            if s.act & {'back', 'pause'} or (TOUCH and s.click):""")
+
+# the phone's back key cancels typing the name
+rep("                elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_ESCAPE):",
+    "                elif ev.key in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_ESCAPE, pg.K_AC_BACK):")
+
 # ================================================================ Russian text for the new lines
 rep("""    "SPIRITS": "ОДЕРЖИМЫЕ",""", """    "TOUCH LAYOUT": "РАСКЛАДКА КНОПОК", "CALIBRATE TOUCH": "КАЛИБРОВКА ЭКРАНА", "FLOATING STICK": "ПЛАВАЮЩИЙ СТИК",
     "BUTTON OPACITY": "ПРОЗРАЧНОСТЬ КНОПОК", "TOUCH CALIBRATION": "КАЛИБРОВКА ЭКРАНА", "MOVE": "ХОД",
     "tap the exact center of the target": "нажми точно в центр мишени",
     "so every button reacts right where you press it": "чтобы кнопки срабатывали ровно там, где жмёшь",
     "drag to move  -  tap, then - / + to resize": "тяни - сдвинуть,  нажми и -/+ - размер",
-    "RESET": "СБРОС",
+    "RESET": "СБРОС", "TAP TO SKIP": "НАЖМИ, ЧТОБЫ ПРОПУСТИТЬ",
     "SPIRITS": "ОДЕРЖИМЫЕ",""")
 
 open(os.path.join(HERE, 'main.py'), 'w', encoding='utf-8').write(src)
